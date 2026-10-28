@@ -153,3 +153,10 @@ Please report vulnerabilities according to [SECURITY.md](SECURITY.md).
 ## License
 
 Morrow is available under the [MIT License](LICENSE).
+
+## Optional owner-authorized VPS administration
+
+The separately deployed [private administration MCP](deploy/vps_admin/README.md)
+lets an explicitly authorized owner expose the host administrator account to
+Morrow's existing tool interface. It is off unless installed and registered;
+it is not a sandbox and must never be exposed as a public unauthenticated API.
