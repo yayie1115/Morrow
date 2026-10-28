@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "base_url": "http://127.0.0.1:18217/v1",
+  "token_file": "/run/secrets/serein-gateway-token",
+  "instance_id": "replace-with-one-stable-instance-uuid",
+  "providers": {
+    "1": {
+      "original-chat-model-id": "upstream-name/model-alias"
+    }
+  }
+}

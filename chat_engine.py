@@ -20,6 +20,7 @@ import requests
 import mcp_client
 import tools
 import voice_engine
+import serein_connection
 from media_utils import detect_image_mime
 
 # 一次回复里最多连续调用几轮工具（防止模型卡在工具循环里）。
@@ -1068,6 +1069,7 @@ def _sse_lines(resp):
         yield text
 
 
+@serein_connection.chat_scope
 def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_id=None,
                 context_limit=HISTORY_LIMIT, image_limit=None, latest_images_only=False,
                 cache_ttl="off", ephemeral_user_message="", stable_extra="",
@@ -1090,7 +1092,7 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
     `think` asks the model to think first (深度思考 toggle). Caller persists the
     assembled reply + its think-trace.
     """
-    provider = get_provider(provider_id)
+    provider = serein_connection.provider(get_provider(provider_id),model or LLM_MODEL)
     if provider:
         base_url, api_key, fmt = provider["base_url"], provider["api_key"], provider["format"]
         if format_override in ("openai", "claude"):
@@ -1663,6 +1665,9 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+
+    payload,gateway_headers=serein_connection.payload(base_url,provider_meta,payload)
+    headers.update(gateway_headers)
 
     endpoint = f"{base_url}/chat/completions"
     req_bytes = _payload_size(payload)

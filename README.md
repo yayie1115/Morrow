@@ -104,6 +104,14 @@ For a persistent HTTPS installation, see the detailed [VPS deployment and push t
 
 ## Optional configuration
 
+This fork can route normal chat turns through the official Serein Gateway using
+`MORROW_SEREIN_GATEWAY_CONFIG`, a private server-side JSON routing map. It changes
+only the transport model alias and stable window header. Background model calls
+retain their original provider route; saved provider credentials and persona are
+not rewritten. Memory, original-message archival, retrieval and optional Event
+processing follow Serein's own implementation. Configure its MCP endpoint using
+Morrow's existing MCP settings. Do not commit the private routing map or token.
+
 Display names, persona, model providers and MCP tools can be configured after login. Optional services such as weather, voice, Web Push and cloud backups are not required for first startup. See [.env.example](.env.example) and [configuration details](docs/configuration.md).
 
 ## Optional music connection
