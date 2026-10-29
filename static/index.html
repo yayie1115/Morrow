@@ -2941,6 +2941,16 @@
       textarea,select,[contenteditable="true"]{font-size:max(16px,1em)!important;}
       .composer-top textarea,.fs-sheet textarea{font-size:max(16px,var(--chat-fs,16px))!important;}
     }
+
+    .chat-receipt{width:100%;margin:9px 0;color:var(--text-secondary);font-size:11px;line-height:1.6;text-align:center;}
+    .row-user{flex-wrap:wrap;}.row-user>.chat-receipt{flex:0 0 100%;min-width:0;}
+    .chat-receipt>summary{display:inline-block;list-style:none;cursor:pointer;padding:5px 12px;max-width:100%;overflow-wrap:anywhere;}
+    .chat-receipt>summary::-webkit-details-marker{display:none;}
+    .chat-receipt>summary::before{content:"›";display:inline-block;margin-right:6px;}
+    .chat-receipt[open]>summary::before{transform:rotate(90deg);}
+    .chat-receipt-body{max-width:560px;max-height:240px;overflow-y:auto;overscroll-behavior:contain;text-align:left;margin:4px auto 0;padding:10px 13px;border:1px solid var(--border);border-radius:12px;background:var(--glass);overflow-wrap:anywhere;}
+    .chat-receipt-item+.chat-receipt-item{margin-top:9px;padding-top:8px;border-top:1px solid var(--border);}
+    .chat-receipt-item small{opacity:.8;font-size:10px;}.chat-receipt-error{color:var(--danger);margin-top:3px;}
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -5943,7 +5953,70 @@ function showEmpty(){
 }
 let historyHasMore=false,historyBefore=null,historySession=null,loadingEarlier=false;
 const CHAT_RENDER_PAGE=80;
-function renderStoredMessage(m){return m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);}
+function renderChatReceiptItems(details,items){
+  const body=details.querySelector(".chat-receipt-body");body.replaceChildren();
+  for(const item of items){
+    const row=document.createElement("div");row.className="chat-receipt-item";
+    const line=document.createElement("div"),status=item.status==="error"?"失败":item.status==="running"?"进行中":"完成";
+    line.textContent=(item.label||"工具调用")+" · "+status+(Number.isFinite(item.duration_ms)&&item.duration_ms>0?" · "+(item.duration_ms/1000).toFixed(1)+"s":"");
+    row.appendChild(line);
+    if(item.error){const text=document.createElement("div");text.className="chat-receipt-error";text.textContent=item.error;row.appendChild(text);}
+    if(item.at){const time=document.createElement("small");time.textContent=String(item.at).replace("T"," ");row.appendChild(time);}
+    body.appendChild(row);
+  }
+  if(!items.length)body.textContent="这个版本暂时没有可展示的调用记录。";
+}
+async function loadChatReceipt(wrap,details){
+  if(!wrap._id||details._loading)return;
+  details._loading=true;const messageId=wrap._id,version=wrap._vi;
+  try{
+    const response=await api("/api/chat/message/"+messageId+"/receipts?session_id="+encodeURIComponent(details._session));
+    if(!response.ok)throw new Error();const data=await response.json();
+    if(wrap._vi!==version||!details.isConnected)return;
+    renderChatReceiptItems(details,data.items||[]);details._loaded=true;
+    details.querySelector("summary").textContent="行动 / 回执 · "+(data.items||[]).length+(data.has_more?"+":"");
+  }catch{details.querySelector(".chat-receipt-body").textContent="记录暂时没读到，收起后展开可重试。";}
+  finally{details._loading=false;}
+}
+function ensureChatReceipt(wrap,count=0){
+  if(!wrap)return null;let details=wrap.querySelector(":scope > .chat-receipt");
+  if(!details){
+    details=document.createElement("details");details.className="chat-receipt";details._session=sessionId;
+    const summary=document.createElement("summary");summary.textContent=count?"行动 / 回执 · "+count:"行动 / 回执";
+    const body=document.createElement("div");body.className="chat-receipt-body";
+    details.append(summary,body);wrap.appendChild(details);
+    details.addEventListener("toggle",()=>{if(details.open&&!details._loaded&&wrap._id)void loadChatReceipt(wrap,details);});
+  }
+  return details;
+}
+function addChatErrorReceipt(wrap,detail,receipt=null){
+  const details=ensureChatReceipt(wrap);if(!details)return;
+  details.querySelector("summary").textContent="报错回执";
+  const message=receipt?.message||(String(detail||"").includes("保存确认")?String(detail):"请求或连接异常；已收到的文字请先核对保存状态。");
+  const item={kind:"error",label:receipt?.id?"服务器回执":"当前页面回执 · 未确认服务器留存",status:"error",error:message,at:new Date().toLocaleString("zh-CN",{hour12:false})};
+  renderChatReceiptItems(details,[item]);details._loaded=!receipt?.id;
+  if(details.open&&receipt?.id&&wrap._id)void loadChatReceipt(wrap,details);
+}
+function addLiveChatAction(wrap,event){
+  const details=ensureChatReceipt(wrap);const items=wrap._liveReceiptItems||(wrap._liveReceiptItems=[]);
+  if(event.phase==="start")items.push({key:event.tool,label:event.narrate||"工具调用",status:"running"});
+  else{
+    const item=[...items].reverse().find(item=>item.key===event.tool&&item.status==="running");
+    if(item){item.status=event.status||"success";item.duration_ms=event.duration_ms;}
+  }
+  details._loaded=true;details.querySelector("summary").textContent="行动记录 · "+items.length;renderChatReceiptItems(details,items);
+}
+function refreshChatReceipt(wrap){
+  const details=wrap?.querySelector(":scope > .chat-receipt");if(!details)return;
+  details._loaded=false;wrap._liveReceiptItems=[];
+  if(details.open)void loadChatReceipt(wrap,details);
+  else details.querySelector("summary").textContent="行动 / 回执";
+}
+function renderStoredMessage(m){
+  const wrap=m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);
+  if(m.receipt_count){const details=ensureChatReceipt(wrap,m.receipt_count);
+    if(m.receipt_error_count===m.receipt_count)details.querySelector("summary").textContent="报错回执 · "+m.receipt_count;}return wrap;
+}
 async function loadEarlierMessages(){
   const log=$("#log");if(loadingEarlier||!historyHasMore||historySession!==sessionId)return;
   loadingEarlier=true;const requestedSession=sessionId,before=historyBefore;
@@ -5988,8 +6061,7 @@ async function loadMessages(scrollToId){
   }
   const carriedBoundary=Number(windowInfo?.continued_summary_through_message_id||0);
   visibleMessages.forEach(m=>{
-    const wrap=m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):
-      addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);
+    const wrap=renderStoredMessage(m);
     if(carriedBoundary&&Number(m.id)===carriedBoundary){
       const mark=document.createElement("div");mark.className="window-summary-boundary";
       mark.setAttribute("aria-label","原对话摘要位置");mark.innerHTML="<span>在原来的窗口，小本本曾整理到这里</span>";
@@ -6397,7 +6469,7 @@ function switchUserVer(wrap,d){
   renderUserBody(wrap);
   renderUserActions(wrap);
   // selected version becomes what gets sent as context (AI is NOT auto-rerun)
-  if(wrap._id)api("/api/chat/message/"+wrap._id+"/version",{method:"PUT",body:JSON.stringify({index:wrap._vi})});
+  if(wrap._id)api("/api/chat/message/"+wrap._id+"/version",{method:"PUT",body:JSON.stringify({index:wrap._vi})}).then(r=>{if(r.ok){ensureChatReceipt(wrap);refreshChatReceipt(wrap);}});
 }
 // AI message: think-trace block above the text, version-aware actions below.
 // Reply text AND its think-trace are stored per version (parallel arrays) so
@@ -6720,16 +6792,18 @@ async function streamInto(url,body,opts={}){
   }
   const failReply=detail=>{
     if(failed||receivedDone)return;failed=true;detail=String(detail||"模型请求失败");
-    showModelError(detail);markReplyFailed(failureUser,detail);
+    addChatErrorReceipt(failureUser||aiEl,detail);markReplyFailed(failureUser,"本次请求未完成，可展开报错回执核对。");
   };
   const rollbackFailedAI=()=>{
     if(!failed)return;
     const partialText=aiEl._versions[aiEl._vi]||"",partialReason=aiEl._reasonings[aiEl._vi]||"";
     const retainPartial=wrap=>{
       wrap._deliveryUnconfirmed=true;wrap._thinkingLive=false;setAIBody(wrap);renderReasoning(wrap);
-      const warning=document.createElement("div");warning.className="caption reply-save-warning";
-      warning.textContent="回复未完成 · 未收到保存确认，文字已暂留；刷新核对后再重试。";
-      wrap.appendChild(warning);
+      const warning=document.createElement("details");warning.className="chat-receipt reply-save-warning";
+      const summary=document.createElement("summary");summary.textContent="保存回执 · 未确认";
+      const explanation=document.createElement("div");explanation.className="chat-receipt-body";
+      explanation.textContent="回复未完成 · 未收到保存确认，文字已暂留；刷新核对后再重试。";
+      warning.append(summary,explanation);wrap.appendChild(warning);
     };
     if(!savedState||opts.retryUnsaved&&!aiEl._id){
       if(partialText.trim()||partialReason.trim())retainPartial(aiEl);else aiEl.remove();return;
@@ -6755,6 +6829,7 @@ async function streamInto(url,body,opts={}){
         setReasoningHead(aiEl,"thinking");
         rb.querySelector(".body").textContent=aiEl._reasonings[aiEl._vi];scrollDown();}
       else if(o.type==="tool"){
+        addLiveChatAction(aiEl,o);
         // 墙后面：chat 只显示叙事动画（上浮气泡），调用与结果都进 tidy 不进气泡
         if(o.phase==="start"){
           if(pill.parentNode)pill.remove();
@@ -6767,9 +6842,9 @@ async function streamInto(url,body,opts={}){
         aiEl._versions[aiEl._vi]+=o.content;
         scheduleAIBody(aiEl);}
       else if(o.type==="empty"){
-        failReply(o.message||"这次没有收到回答");}
+        failReply(o.message||"这次没有收到回答");if(o.receipt)addChatErrorReceipt(failureUser||aiEl,o.message,o.receipt);}
       else if(o.type==="error"){
-        failReply((o.status?o.status+" · ":"")+(o.detail||"模型请求失败"));}
+        failReply((o.status?o.status+" · ":"")+(o.detail||"模型请求失败"));if(o.receipt)addChatErrorReceipt(failureUser||aiEl,o.detail,o.receipt);}
       // keep the think-trace expanded the whole way through, tuck it away only
       // once the reply is fully done (so the chain is never visually cut short)
       else if(o.type==="done"){receivedDone=true;failed=false;aiEl._deliveryUnconfirmed=false;aiEl._id=o.message_id;dropTool();finishReasoning();
@@ -6783,7 +6858,9 @@ async function streamInto(url,body,opts={}){
         if(o.notification_event_id&&!document.hidden&&document.hasFocus()){
           void api("/api/push/events/"+o.notification_event_id+"/foreground",{method:"POST",body:"{}"});
         }
-        if(o.partial)showModelError("Morrow的后半句话没接稳，已经收到的内容和动作都留下了");
+        if(o.partial)addChatErrorReceipt(aiEl,"回复中断，已收到的部分已保存。",o.receipt);
+        if(o.receipt_count===0)aiEl.querySelector(":scope > .chat-receipt")?.remove();
+        else{if(o.receipt_count)ensureChatReceipt(aiEl,o.receipt_count);refreshChatReceipt(aiEl);}
         renderUsageDashboard();
         if(titlePending&&!o.partial)void generateConversationTitle(sessionId);
         if(gotReason&&(aiEl._reasonings[aiEl._vi]||"").trim()&&!rb.classList.contains("collapsed"))toggleReasoning(rb);}

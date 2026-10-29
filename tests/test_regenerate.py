@@ -471,7 +471,8 @@ class RegenerateTargetTest(unittest.TestCase):
         self.assertFalse(any(event.get("type") == "error" for event in events))
         done = next(event for event in events if event.get("type") == "done")
         self.assertTrue(done["partial"])
-        self.assertEqual(done["detail"], "network error")
+        self.assertEqual(done["receipt"]["code"], "INTERRUPTED")
+        self.assertEqual(done["detail"], done["receipt"]["message"])
 
         conn = sqlite3.connect(app.DB_PATH)
         row = conn.execute(
@@ -538,7 +539,8 @@ class RegenerateTargetTest(unittest.TestCase):
         ]
         done = next(event for event in events if event.get("type") == "done")
         self.assertTrue(done["partial"])
-        self.assertEqual(done["detail"], "provider connection vanished")
+        self.assertEqual(done["receipt"]["code"], "INTERRUPTED")
+        self.assertTrue(done["receipt"]["id"])
 
         conn = sqlite3.connect(app.DB_PATH);conn.row_factory = sqlite3.Row
         assistant = conn.execute(
@@ -546,7 +548,7 @@ class RegenerateTargetTest(unittest.TestCase):
             (session_id,),
         ).fetchone()
         ledger = conn.execute(
-            "SELECT message_id,run_id,tool,narrate FROM tool_calls ORDER BY id"
+            "SELECT message_id,run_id,tool,narrate FROM tool_calls WHERE source!='receipt' ORDER BY id"
         ).fetchall()
         conn.close()
         self.assertIsNotNone(assistant)
@@ -575,7 +577,7 @@ class RegenerateTargetTest(unittest.TestCase):
             "SELECT content,versions,active,tool_log FROM messages WHERE id=?", (assistant_id,)
         ).fetchone()
         ledger = conn.execute(
-            "SELECT message_id,run_id,tool FROM tool_calls WHERE message_id=? ORDER BY id", (assistant_id,)
+            "SELECT message_id,run_id,tool FROM tool_calls WHERE message_id=? AND source!='receipt' ORDER BY id", (assistant_id,)
         ).fetchall()
         conn.close()
         versions = json.loads(message["versions"])
@@ -731,7 +733,9 @@ class RegenerateTargetTest(unittest.TestCase):
         ]
         error = next(event for event in events if event.get("type") == "error")
         self.assertEqual(error["status"], 400)
-        self.assertEqual(error["detail"], "bad image payload")
+        self.assertEqual(error["receipt"]["code"], "REQUEST_FAILED")
+        self.assertIn("HTTP 400",error["detail"])
+        self.assertTrue(error["receipt"]["id"])
         self.assertFalse(any(event.get("type") == "delta" for event in events))
         session_id = next(event["session_id"] for event in events if event.get("type") == "session")
 
@@ -754,7 +758,8 @@ class RegenerateTargetTest(unittest.TestCase):
         self.assertFalse(any(event.get("type") == "error" for event in events))
         done = next(event for event in events if event.get("type") == "done")
         self.assertTrue(done["partial"])
-        self.assertEqual(done["detail"], "upload timed out")
+        self.assertEqual(done["receipt"]["code"], "TIMEOUT")
+        self.assertEqual(done["detail"], done["receipt"]["message"])
 
         conn = sqlite3.connect(app.DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -763,7 +768,7 @@ class RegenerateTargetTest(unittest.TestCase):
             "WHERE id=?", (done["message_id"],)
         ).fetchone()
         ledger = conn.execute(
-            "SELECT tool,status,error FROM tool_calls WHERE message_id=? ORDER BY id",
+            "SELECT tool,status,error FROM tool_calls WHERE message_id=? AND source!='receipt' ORDER BY id",
             (done["message_id"],),
         ).fetchall()
         conn.close()

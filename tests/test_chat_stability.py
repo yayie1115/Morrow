@@ -91,7 +91,7 @@ const loadMessages=async()=>{loads++;};const showEmpty=()=>{};
         harness=r"""
 const assert=require('node:assert/strict');let failed=true,savedState=null,opts={},removed=false,extra=[];
 const make=(text)=>({_versions:[text],_reasonings:[''],_vi:0,appendChild(n){this.warning=n.textContent;},remove(){removed=true;}});
-let aiEl=make('Received partial text');const document={createElement:()=>({})};
+let aiEl=make('Received partial text');const document={createElement:()=>({append(...children){this.textContent=children.map(n=>n.textContent).join(" ");}})};
 const setAIBody=()=>{},renderReasoning=()=>{},renderAIActions=()=>{},isLastAI=()=>true;
 const addAI=(text)=>{const w=make(text);extra.push(w);return w;};
 """
@@ -104,3 +104,13 @@ assert.deepEqual(aiEl._versions,['Saved original']);assert.equal(extra[0]._versi
 assert.equal(extra[0]._deliveryUnconfirmed,true);
 """
         subprocess.run(["node","-e",harness+code+checks],check=True)
+
+    def test_chat_receipts_are_collapsed_and_loaded_only_on_open(self):
+        page=Path("static/index.html").read_text(encoding="utf-8")
+        ensure=page.split("function ensureChatReceipt(",1)[1].split("function addChatErrorReceipt",1)[0]
+        self.assertIn('document.createElement("details")',ensure)
+        self.assertNotIn(".open=true",ensure)
+        self.assertIn('if(details.open&&!details._loaded&&wrap._id)',ensure)
+        render=page.split("function renderChatReceiptItems(",1)[1].split("async function loadChatReceipt",1)[0]
+        self.assertNotIn("innerHTML",render)
+        self.assertIn("textContent",render)

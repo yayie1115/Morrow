@@ -2737,6 +2737,78 @@ def _clean_attachments(raw):
     return out
 
 
+def _receipt_error(detail, status=None):
+    text = str(detail or "").lower()
+    if "database is locked" in text:
+        code, message = "DATABASE_BUSY", "保存时数据库繁忙，请稍后核对聊天记录。"
+    elif ("token" in text and any(word in text for word in ("exceed", "maximum", "limit"))):
+        code, message = "CONTEXT_LIMIT", "模型输入超过上限，请缩小上下文或检索范围后重试。"
+    elif "timeout" in text or "timed out" in text:
+        code, message = "TIMEOUT", "请求超时，已收到的内容请先核对保存状态。"
+    elif str(status) in {"401", "403"}:
+        code, message = "ACCESS_DENIED", "模型服务拒绝了认证或权限，请检查服务配置。"
+    elif str(status) == "429":
+        code, message = "RATE_LIMIT", "模型服务限流，请稍后重试。"
+    elif any(word in text for word in ("disconnect", "connection", "network", "断开", "中断")):
+        code, message = "INTERRUPTED", "连接中断，请核对已保存内容后再重试。"
+    else:
+        code, message = "REQUEST_FAILED", "本次请求未完成，请核对已收到的内容后再重试。"
+    if str(status).isdigit() and 400 <= int(status) <= 599:
+        message = "HTTP " + str(status) + " · " + message
+    return {"code": code, "message": message}
+
+
+def _record_chat_error(conn, session_id, message_id, run_id, detail, status=None):
+    receipt = _receipt_error(detail, status)
+    exists = conn.execute("SELECT id FROM tool_calls WHERE session_id=? AND run_id=? AND source='receipt' LIMIT 1",
+                          (session_id, run_id)).fetchone()
+    if exists:
+        receipt["id"] = exists[0]
+    else:
+        cur = conn.execute(
+            "INSERT INTO tool_calls(session_id,message_id,run_id,tool,narrate,source,status,error,result) "
+            "VALUES (?,?,?,'_chat_error_receipt','回复报错','receipt','error',?,?)",
+            (session_id, message_id, run_id, receipt["message"], json.dumps({"code":receipt["code"]})))
+        receipt["id"] = cur.lastrowid
+    receipt["message_id"] = message_id
+    return receipt
+
+
+@app.get("/api/chat/message/<int:message_id>/receipts")
+@require_auth
+def get_chat_receipts(message_id):
+    db = get_db()
+    message = db.execute("SELECT session_id,role,versions,active,hidden FROM messages WHERE id=?", (message_id,)).fetchone()
+    if message is None or message["hidden"] or request.args.get("session_id", type=int) != message["session_id"]:
+        return jsonify({"error":"记录不存在"}), 404
+    run_id = None
+    if message["role"] == "assistant":
+        try:
+            versions = json.loads(message["versions"] or "[]")
+            run_id = versions[message["active"] or 0].get("tool_run_id") if versions else None
+        except (ValueError, TypeError, IndexError, AttributeError):
+            pass
+    where, params = "session_id=? AND message_id=?", [message["session_id"], message_id]
+    if run_id:
+        where += " AND run_id=?"
+        params.append(run_id)
+    # Never select args/results: they may contain private configuration or very large outputs.
+    rows = db.execute("SELECT id,tool,narrate,source,status,duration_ms,error,created_at FROM tool_calls WHERE "
+                      + where + " ORDER BY id DESC LIMIT 101", params).fetchall()
+    items = []
+    for row in reversed(rows[:100]):
+        failed = row["status"] == "error"
+        error = _receipt_error(row["error"]) if failed else None
+        label = "回复报错" if row["source"] == "receipt" else (row["narrate"] or "工具调用")
+        # Names are display labels only. Strip common credential forms defensively.
+        label = re.sub(r"(?i)(bearer\s+|(?:api[_-]?key|token|password)\s*[:=]\s*)\S+", "[已隐藏]", label)[:100]
+        label = re.sub(r"https?://\S+|sk-[A-Za-z0-9_-]{8,}", "[已隐藏]", label)
+        items.append({"id":row["id"],"kind":"error" if row["source"] == "receipt" else "tool",
+                      "label":label,"status":row["status"],"duration_ms":row["duration_ms"],
+                      "at":row["created_at"],"error":(row["error"] if row["source"] == "receipt" else error["message"]) if error else ""})
+    return jsonify({"items":items,"has_more":len(rows)>100})
+
+
 @app.get("/api/chat/messages/<int:session_id>")
 @require_auth
 def get_messages(session_id):
@@ -2766,6 +2838,12 @@ def get_messages(session_id):
     artifacts_by_message = {}
     for artifact in artifact_rows:
         artifacts_by_message.setdefault(artifact["message_id"], []).append(_artifact_dict(artifact))
+    receipt_groups = {}
+    if rows:
+        for receipt in db.execute(
+            "SELECT message_id,run_id,count(*) AS n,sum(CASE WHEN source='receipt' THEN 1 ELSE 0 END) AS errors FROM tool_calls WHERE session_id=? AND message_id>=? AND message_id<=? GROUP BY message_id,run_id",
+            (session_id, min(ids), max(ids))):
+            receipt_groups.setdefault(receipt["message_id"], []).append((receipt["run_id"], receipt["n"], receipt["errors"]))
     out = []
     for r in rows:
         d = dict(r)
@@ -2786,6 +2864,12 @@ def get_messages(session_id):
         except (TypeError, ValueError):
             d["attachments"] = []
         d["artifacts"] = artifacts_by_message.get(r["id"], [])
+        active_run = None
+        if d["role"] == "assistant" and isinstance(d.get("versions"), list) and d["versions"]:
+            active_version = d["versions"][min(max(d["active"] or 0, 0), len(d["versions"])-1)]
+            active_run = active_version.get("tool_run_id") if isinstance(active_version, dict) else None
+        d["receipt_count"] = sum(n for run,n,e in receipt_groups.get(r["id"], []) if not active_run or run==active_run)
+        d["receipt_error_count"] = sum(e for run,n,e in receipt_groups.get(r["id"], []) if not active_run or run==active_run)
         out.append(d)
     return jsonify(out)
 
@@ -3302,7 +3386,7 @@ def _version_tool_log(db, msg_id, version):
         return []
     rows = db.execute(
         "SELECT tool,args,result,source,server,status,error FROM tool_calls "
-        "WHERE message_id=? AND run_id=? ORDER BY id",
+        "WHERE message_id=? AND run_id=? AND source!='receipt' ORDER BY id",
         (msg_id, run_id),
     ).fetchall()
     result = []
@@ -3783,7 +3867,8 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
                     artifact_conn.commit();artifact_conn.close()
                 yield _sse({"type": "tool", "phase": "result",
                             "tool": payload["tool"], "narrate": payload["narrate"],
-                            "result": payload.get("result", "")})
+                            "status":"success" if payload.get("ok",True) else "error",
+                            "duration_ms":payload.get("duration_ms",0)})
                 continue
             tool_entry = {"name": payload["tool"], "args": payload.get("args") or {},
                           "display_tool": payload.get("display_tool", payload["tool"]),
@@ -3798,7 +3883,8 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             persist_completed_tool(tool_entry)
             yield _sse({"type": "tool", "phase": "result",
                         "tool": payload["tool"], "narrate": payload["narrate"],
-                        "result": payload.get("result", "")})
+                        "status":"success" if payload.get("ok",True) else "error",
+                        "duration_ms":payload.get("duration_ms",0)})
         elif kind == "usage":
             usage_log.append(payload)
         elif kind in ("model_round_start", "loop_closing"):
@@ -3842,12 +3928,13 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         # or a reply version from the error text.
         for u in usage_log:
             _insert_usage(conn, session_id, None, u)
+        error_receipt = _record_chat_error(conn, session_id, user_msg_id or vision_source_msg_id, tool_run_id,
+                                           stream_error.get("message"), stream_error.get("status"))
         conn.commit()
         conn.close()
         yield _sse({
-            "type": "error",
-            "status": stream_error.get("status"),
-            "detail": str(stream_error.get("message") or "模型请求失败")[:1000],
+            "type": "error", "status": stream_error.get("status"),
+            "detail": error_receipt["message"], "receipt": error_receipt,
         })
         return
     if not has_material:
@@ -3856,9 +3943,10 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         # in the conversation.
         for u in usage_log:
             _insert_usage(conn, session_id, None, u)
+        error_receipt = _record_chat_error(conn, session_id, user_msg_id or vision_source_msg_id, tool_run_id, "empty response")
         conn.commit()
         conn.close()
-        yield _sse({"type": "empty", "message": "这次没有收到回答，可以换个渠道再试"})
+        yield _sse({"type": "empty", "message": "这次没有收到回答，可以换个渠道再试", "receipt":error_receipt})
         return
     if regen_id:
         row = conn.execute(
@@ -3948,6 +4036,10 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         "UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?",
         (session_id,),
     )
+    error_receipt = (_record_chat_error(conn, session_id, msg_id, tool_run_id, partial_error.get("message"), partial_error.get("status"))
+                     if partial_error else None)
+    receipt_count = conn.execute("SELECT count(*) FROM tool_calls WHERE session_id=? AND message_id=? AND run_id=?",
+                                 (session_id, msg_id, tool_run_id)).fetchone()[0]
     push_event = None
     if not partial_error:
         push_event = _create_push_event(conn, session_id, msg_id, "message")
@@ -3973,14 +4065,14 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     done_payload = {
         "type": "done", "message_id": msg_id, "model": meta["model"],
         "at": meta["at"], "think_ms": reasoning_ms, "attachments": reply_attachments,
-        "artifacts": done_artifacts,
+        "artifacts": done_artifacts, "receipt_count":receipt_count,
     }
     if push_event:
         done_payload["notification_event_id"] = push_event["id"]
     if partial_error:
         done_payload.update({
             "partial": True,
-            "detail": str(partial_error.get("message") or "模型连接在后半段中断")[:1000],
+            "detail": error_receipt["message"], "receipt":error_receipt,
         })
     yield _sse(done_payload)
 

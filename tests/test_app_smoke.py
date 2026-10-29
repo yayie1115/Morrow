@@ -107,6 +107,60 @@ class AppSmokeTest(unittest.TestCase):
                 db.rollback()
                 raise
 
+    def test_chat_receipts_are_lazy_scoped_and_exclude_raw_outputs(self):
+        client = app.app.test_client()
+        self.assertEqual(client.get("/api/chat/message/1/receipts?session_id=1").status_code,401)
+        client.post("/api/login",json={"password":app.AUTH_PASSWORD})
+        with app.app.app_context():
+            db=app.get_db()
+            sid=db.execute("INSERT INTO sessions(title) VALUES ('Synthetic receipts')").lastrowid
+            versions=json.dumps([{"c":"old","tool_run_id":"old"},{"c":"current","tool_run_id":"current"}])
+            mid=db.execute("INSERT INTO messages(session_id,role,content,versions,active) VALUES (?,?,?,?,?)",(sid,"assistant","current",versions,1)).lastrowid
+            for run in ("old","current"):
+                db.execute("INSERT INTO tool_calls(session_id,message_id,run_id,tool,narrate,args,result,status,duration_ms) VALUES (?,?,?,?,?,?,?,?,?)",(sid,mid,run,"synthetic_lookup","读取记忆",'{"token":"synthetic-private"}',"synthetic-private-raw"*10000,"success",123))
+            db.commit()
+        path=f"/api/chat/message/{mid}/receipts?session_id={sid}"
+        response=client.get(path);self.assertEqual(response.status_code,200)
+        items=response.get_json()["items"];self.assertEqual(len(items),1)
+        self.assertEqual(items[0]["duration_ms"],123)
+        self.assertNotIn("synthetic-private",response.get_data(as_text=True))
+        history=client.get(f"/api/chat/messages/{sid}?limit=80").get_json()
+        self.assertEqual(history[0]["receipt_count"],1)
+        self.assertEqual(client.get(f"/api/chat/message/{mid}/receipts?session_id={sid+1}").status_code,404)
+        with app.app.app_context():
+            db=app.get_db();db.execute("UPDATE messages SET hidden=1 WHERE id=?",(mid,));db.commit()
+        self.assertEqual(client.get(path).status_code,404)
+
+    def test_failed_model_reply_has_persistent_error_receipt_without_fake_message(self):
+        client=app.app.test_client();client.post("/api/login",json={"password":app.AUTH_PASSWORD})
+        with mock.patch("chat_engine.stream_chat",return_value=iter([("error",{"status":429,"message":"Bearer synthetic-secret-token"})])):
+            response=client.post("/api/chat/send",json={"message":"Synthetic request"})
+            events=[json.loads(line[5:]) for line in response.get_data(as_text=True).splitlines() if line.startswith("data:")]
+        error=next(e for e in events if e["type"]=="error")
+        self.assertIn("HTTP 429",error["detail"])
+        self.assertNotIn("synthetic-secret-token",error["detail"])
+        session_event=next(e for e in events if e["type"]=="session")
+        sid=session_event["session_id"];mid=session_event["user_message_id"]
+        history=client.get(f"/api/chat/messages/{sid}").get_json()
+        self.assertEqual([m["role"] for m in history],["user"])
+        self.assertEqual(history[0]["receipt_count"],1)
+        receipt=client.get(f"/api/chat/message/{mid}/receipts?session_id={sid}").get_json()["items"][0]
+        self.assertEqual(receipt["kind"],"error")
+        self.assertIn("限流",receipt["error"])
+
+    def test_partial_reply_receipt_is_saved_and_not_replayed_as_model_tool(self):
+        client=app.app.test_client();client.post("/api/login",json={"password":app.AUTH_PASSWORD})
+        stream=iter([("delta","Synthetic partial"),("error",{"message":"connection interrupted"})])
+        with mock.patch("chat_engine.stream_chat",return_value=stream):
+            response=client.post("/api/chat/send",json={"message":"Synthetic partial request"})
+            events=[json.loads(line[5:]) for line in response.get_data(as_text=True).splitlines() if line.startswith("data:")]
+        done=next(e for e in events if e["type"]=="done");self.assertTrue(done["partial"])
+        self.assertTrue(done["receipt"]["id"])
+        with app.app.app_context():
+            db=app.get_db();version=json.loads(db.execute("SELECT versions FROM messages WHERE id=?",(done["message_id"],)).fetchone()[0])[0]
+            version.pop("tool_log",None)
+            self.assertEqual(app._version_tool_log(db,done["message_id"],version),[])
+
     @staticmethod
     def _local_model_stream(session_id, **_kwargs):
         args = {"text": "冒烟测试待办"}
