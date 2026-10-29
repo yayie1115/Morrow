@@ -846,7 +846,7 @@
       color:var(--text-secondary);font-family:inherit;font-size:9px;line-height:1.15;text-align:left;}
     .daily-model-switch span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .daily-model-chev{flex:0 0 auto;margin-left:3px;font-size:10px;transform:translateY(-1px);}
-    #log{position:relative;z-index:1;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:76px 0 92px;
+    #log{position:relative;z-index:1;flex:1;min-height:0;overflow-anchor:none;overscroll-behavior-y:contain;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:76px 0 92px;
       -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 54px);
       mask-image:linear-gradient(to bottom,transparent 0,#000 54px);}
     .msg{animation:msgIn .2s var(--ease);}
@@ -5916,7 +5916,20 @@ function showEmpty(){
   $("#log").innerHTML='<div class="placeholder-note" style="margin-top:30vh">'+
     '<span class="cn">'+escHtml(cn)+'</span></div>';
 }
+let earlierMessages=[],historySession=null,loadingEarlier=false;
+const CHAT_RENDER_PAGE=80;
+function renderStoredMessage(m){return m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);}
+function loadEarlierMessages(){
+  const log=$("#log");if(loadingEarlier||!earlierMessages.length||historySession!==sessionId)return;
+  loadingEarlier=true;const anchor=log.querySelector(".msg"),top=anchor?.getBoundingClientRect().top;
+  const fragment=document.createDocumentFragment();
+  earlierMessages.splice(-CHAT_RENDER_PAGE).forEach(m=>fragment.appendChild(renderStoredMessage(m)));
+  log.insertBefore(fragment,anchor);refreshDailyTimeDividers();renderCompressionBoundary();
+  if(anchor)log.scrollTop+=anchor.getBoundingClientRect().top-top;
+  loadingEarlier=false;
+}
 async function loadMessages(scrollToId){
+  const requestedSession=sessionId;
   await syncFavorites();
   const [messageResponse,windowResponse]=await Promise.all([
     api("/api/chat/messages/"+sessionId),
@@ -5924,6 +5937,9 @@ async function loadMessages(scrollToId){
   ]);
   const msgs=await messageResponse.json();
   const windowInfo=windowResponse?.ok?await windowResponse.json():null;
+  if(sessionId!==requestedSession)return;
+  historySession=sessionId;earlierMessages=scrollToId?[]:msgs.slice(0,-CHAT_RENDER_PAGE);
+  const visibleMessages=scrollToId?msgs:msgs.slice(-CHAT_RENDER_PAGE);
   $("#log").innerHTML="";
   if(windowInfo?.continued_from){
     const origin=document.createElement("button");origin.type="button";origin.className="window-origin";
@@ -5933,7 +5949,7 @@ async function loadMessages(scrollToId){
     $("#log").appendChild(origin);
   }
   const carriedBoundary=Number(windowInfo?.continued_summary_through_message_id||0);
-  msgs.forEach(m=>{
+  visibleMessages.forEach(m=>{
     const wrap=m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):
       addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);
     if(carriedBoundary&&Number(m.id)===carriedBoundary){
@@ -5995,7 +6011,7 @@ function updateToBottom(){
   const far=prefNav()&&(l.scrollHeight-l.scrollTop-l.clientHeight>200);
   toBottomBtn.classList.toggle("show",far);
 }
-$("#log").addEventListener("scroll",updateToBottom,{passive:true});
+$("#log").addEventListener("scroll",()=>{updateToBottom();if($("#log").scrollTop<80)loadEarlierMessages();},{passive:true});
 toBottomBtn.onclick=()=>scrollDown(true);
 // today → just HH:MM；过去的日子 → "Jul 17 · 18:50"
 const MONTH_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -6180,11 +6196,13 @@ $("#modelErrorCard").addEventListener("mouseleave",armModelErrorTimer);
 $("#modelErrorCard").addEventListener("focusin",()=>clearTimeout(modelErrorTimer));
 $("#modelErrorCard").addEventListener("focusout",armModelErrorTimer);
 $("#modelErrorCopy").onclick=()=>{copyText(modelErrorDetail);setTimeout(hideModelError,250);};
-// 流式时 token 可能来得很快；用 rAF 把渲染合并到每帧一次，既流畅又省力。
+// Coalesce stream updates; rebuild Markdown at most every 80ms, preserving reader position.
 let _bodyRAF=0,_bodyPending=null;
 function scheduleAIBody(wrap){_bodyPending=wrap;
   if(_bodyRAF)return;
-  _bodyRAF=requestAnimationFrame(()=>{_bodyRAF=0;const w=_bodyPending;_bodyPending=null;setAIBody(w);scrollDown();});}
+  _bodyRAF=setTimeout(()=>{_bodyRAF=0;const w=_bodyPending;_bodyPending=null;
+    if(!w?.isConnected)return;const l=$("#log"),follow=l.scrollHeight-l.scrollTop-l.clientHeight<120;
+    setAIBody(w);if(follow)scrollDown(true);},80);}
 
 const PHOTO_CARD_W=84,PHOTO_CARD_H=112;
 let photoViewerOrigin=null,photoViewerOpening=false,photoViewerHideTimer=null;
@@ -6489,18 +6507,19 @@ function syncComposerSpace(){const h=composerEl?composerEl.offsetHeight:80;
   const covered=plusPopFlowHeight();
   const breathing=document.body.classList.contains("daily-chat")?8:28;
   const base=Math.max(52,h-covered)+breathing;
-  $("#log").style.paddingBottom=(base+(plusBottomSpace?covered:0))+"px";}
+  const padding=(base+(plusBottomSpace?covered:0))+"px";
+  if($("#log").style.paddingBottom!==padding)$("#log").style.paddingBottom=padding;}
 if(window.ResizeObserver&&composerEl)new ResizeObserver(syncComposerSpace).observe(composerEl);
 function updateSendAvailability(){const b=$("#sendBtn");if(!b||streaming||preparingSend)return;
   const hasText=!!input.value.trim(),hasAttachment=attachments.some(a=>a.isImg||a.isText||a.isSticker);
   b.disabled=!hasText&&!hasAttachment;b.classList.toggle("ready",hasText||hasAttachment);}
 function autoGrow(){input.style.height="auto";input.style.height=Math.min(input.scrollHeight,140)+"px";
   updateSendAvailability();syncComposerSpace();}
-input.addEventListener("input",autoGrow);
-// 全篇 button only while the input bar is focused; focusing pushes the latest
-// message up above the bar so typing never covers it
+let composerFrame=0;
+input.addEventListener("input",()=>{updateSendAvailability();if(!composerFrame)composerFrame=requestAnimationFrame(()=>{composerFrame=0;autoGrow();});});
+// Reveal the full editor without moving the reader or stealing scroll position.
 input.addEventListener("focus",()=>{input.placeholder=pickOne(COMPOSER_HINTS);
-  $("#expandBtn").hidden=false;syncComposerSpace();scrollDown(true);});
+  $("#expandBtn").hidden=false;syncComposerSpace();});
 input.addEventListener("blur",()=>setTimeout(()=>{if(document.activeElement!==input)$("#expandBtn").hidden=true;},150));
 $("#expandBtn").addEventListener("mousedown",e=>e.preventDefault());
 // Enter = newline. Messages send only via the 飞机 button (per request).
@@ -6600,7 +6619,7 @@ async function send(){
       model:getModel(),provider_id:getProviderId(),think:getThink(),context_limit:getContextLimit(),
       image_limit:getImageLimit(),latest_images_only:getLatestImagesOnly(),cache_ttl:getChatCacheTtl(),
       vision_enabled:!!ASSISTANT_STATE.vision.enabled,music_context:musicChatContext()},{userEl});
-    input.focus();
+    // Do not steal focus or reopen the keyboard when a delayed reply completes.
   }finally{
     sending=false;setSendPreparing(false);
   }
