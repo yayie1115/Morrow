@@ -2771,7 +2771,14 @@ def get_messages(session_id):
         d = dict(r)
         if d.get("versions"):
             try:
-                d["versions"] = json.loads(d["versions"])
+                versions = json.loads(d["versions"])
+                # Tool transcripts are persisted for model/audit replay, not chat rendering.
+                # Never ship megabytes of hidden tool output inside every UI version.
+                d["versions"] = [
+                    {key: value for key, value in version.items() if key != "tool_log"}
+                    if isinstance(version, dict) else version
+                    for version in versions
+                ] if isinstance(versions, list) else None
             except (TypeError, ValueError):
                 d["versions"] = None
         try:
@@ -3397,12 +3404,17 @@ def _usage_numbers(raw):
     }
 
 
-def _model_price(provider_id, model_id):
+def _model_price(provider_id, model_id, conn=None):
     if not provider_id or not model_id:
         return {}
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT models FROM providers WHERE id = ?", (provider_id,)).fetchone()
-    conn.close()
+    owns_connection = conn is None
+    if owns_connection:
+        conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute("SELECT models FROM providers WHERE id = ?", (provider_id,)).fetchone()
+    finally:
+        if owns_connection:
+            conn.close()
     if not row:
         return {}
     try:
@@ -3436,7 +3448,7 @@ def _insert_usage(conn, session_id, message_id, item):
     provider = item.get("provider") or {}
     provider_id = provider.get("id")
     model = item.get("model") or ""
-    price = _model_price(provider_id, model)
+    price = _model_price(provider_id, model, conn=conn)
     cost = _calc_cost_usd(nums, price)
     cur = conn.execute(
         "INSERT INTO api_usage (session_id, message_id, provider_id, provider_name, format, model, "

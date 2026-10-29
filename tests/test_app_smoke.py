@@ -61,6 +61,52 @@ class AppSmokeTest(unittest.TestCase):
         for query in ("limit=0", "limit=201", "limit=x", "before=-1", "before=x"):
             self.assertEqual(client.get(path + "?" + query).status_code, 400)
 
+    def test_chat_history_omits_internal_tool_transcripts_from_display_versions(self):
+        client = app.app.test_client()
+        client.post("/api/login", json={"password": app.AUTH_PASSWORD})
+        versions = [
+            {"c": "Synthetic first reply", "r": "Synthetic reasoning", "at": "2026-01-01T12:00:00", "a": [],
+             "model": "synthetic", "tool_run_id": "run-one", "artifact_ids": [7],
+             "tool_log": [{"name": "synthetic_lookup", "result": "x" * 1800000}]},
+            {"c": "Synthetic revised reply", "tool_log": [{"name": "synthetic_lookup", "result": "y" * 1800000}]},
+        ]
+        stored = json.dumps(versions)
+        with app.app.app_context():
+            db = app.get_db()
+            sid = db.execute("INSERT INTO sessions(title) VALUES ('Synthetic payload')").lastrowid
+            mid = db.execute("INSERT INTO messages(session_id,role,content,versions,active,tool_log) VALUES (?,?,?,?,?,?)",
+                             (sid, "assistant", versions[1]["c"], stored, 1, json.dumps(versions[1]["tool_log"]))).lastrowid
+            db.commit()
+        for suffix in ("", "?limit=80"):
+            response = client.get(f"/api/chat/messages/{sid}" + suffix)
+            self.assertLess(len(response.data), 4096)
+            message = response.get_json()[0]
+            self.assertEqual(message["active"], 1)
+            self.assertEqual(message["versions"], [{k:v for k,v in item.items() if k != "tool_log"} for item in versions])
+        with app.app.app_context():
+            row = app.get_db().execute("SELECT versions,tool_log FROM messages WHERE id=?", (mid,)).fetchone()
+            self.assertEqual(row["versions"], stored)
+            self.assertEqual(len(json.loads(row["tool_log"])[0]["result"]),1800000)
+
+    def test_usage_pricing_reuses_reply_transaction_even_under_exclusive_lock(self):
+        with app.app.app_context():
+            db = app.get_db()
+            pid = db.execute("INSERT INTO providers(name,models) VALUES (?,?)",
+                             ("Synthetic", json.dumps([{"id":"synthetic", "price_input":2, "price_output":4}]))).lastrowid
+            db.commit()
+            db.execute("BEGIN EXCLUSIVE")
+            try:
+                sid = db.execute("INSERT INTO sessions(title) VALUES ('Synthetic locked transaction')").lastrowid
+                mid = db.execute("INSERT INTO messages(session_id,role,content) VALUES (?,?,?)", (sid,"assistant","Synthetic saved reply")).lastrowid
+                with mock.patch("app.sqlite3.connect", side_effect=AssertionError("must reuse transaction connection")):
+                    app._insert_usage(db,sid,mid,{"provider":{"id":pid},"model":"synthetic","usage":{"input_tokens":10,"output_tokens":5}})
+                row = db.execute("SELECT cost_usd FROM api_usage WHERE message_id=?",(mid,)).fetchone()
+                self.assertAlmostEqual(row[0], .00004)
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+
     @staticmethod
     def _local_model_stream(session_id, **_kwargs):
         args = {"text": "冒烟测试待办"}

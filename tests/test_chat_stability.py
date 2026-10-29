@@ -82,3 +82,25 @@ const loadMessages=async()=>{loads++;};const showEmpty=()=>{};
         enter=page.split("async function enterApp(",1)[1].split("async function checkAuth",1)[0]
         self.assertNotIn("settleCore(homeReady)",enter)
         self.assertIn("warmInitialChat()",enter)
+
+    def test_stream_failure_preserves_received_text_without_faking_saved_version(self):
+        if not shutil.which("node"):
+            self.skipTest("Node.js unavailable")
+        page=Path("static/index.html").read_text(encoding="utf-8")
+        code="const rollbackFailedAI=()=>{"+page.split("const rollbackFailedAI=()=>{",1)[1].split('  const rb=aiEl.querySelector',1)[0]
+        harness=r"""
+const assert=require('node:assert/strict');let failed=true,savedState=null,opts={},removed=false,extra=[];
+const make=(text)=>({_versions:[text],_reasonings:[''],_vi:0,appendChild(n){this.warning=n.textContent;},remove(){removed=true;}});
+let aiEl=make('Received partial text');const document={createElement:()=>({})};
+const setAIBody=()=>{},renderReasoning=()=>{},renderAIActions=()=>{},isLastAI=()=>true;
+const addAI=(text)=>{const w=make(text);extra.push(w);return w;};
+"""
+        checks=r"""
+rollbackFailedAI();assert.equal(removed,false);assert.equal(aiEl._versions[0],'Received partial text');
+assert.equal(aiEl._deliveryUnconfirmed,true);assert.match(aiEl.warning,/未收到保存确认/);
+savedState={versions:['Saved original'],reasonings:[''],models:[''],ats:[''],thinkTimes:[null],attachmentVersions:[[]],artifactVersions:[[]],vi:0};
+aiEl=make('Failed regenerated text');rollbackFailedAI();
+assert.deepEqual(aiEl._versions,['Saved original']);assert.equal(extra[0]._versions[0],'Failed regenerated text');
+assert.equal(extra[0]._deliveryUnconfirmed,true);
+"""
+        subprocess.run(["node","-e",harness+code+checks],check=True)

@@ -6692,7 +6692,7 @@ async function branch(wrap){
 }
 // shared streaming for send / regenerate / edit
 async function streamInto(url,body,opts={}){
-  let aiEl=opts.versionTarget||null,started=false,gotReason=false,toolEl=null,failed=false,titlePending=false;
+  let aiEl=opts.versionTarget||null,started=false,gotReason=false,toolEl=null,failed=false,titlePending=false,receivedDone=false;
   const userRows=$("#log").querySelectorAll(".row-user");
   const failureUser=opts.retryUserEl||opts.userEl||(opts.retryUnsaved&&userRows.length?userRows[userRows.length-1]:null);
   const savedState=aiEl?{
@@ -6719,15 +6719,25 @@ async function streamInto(url,body,opts={}){
     aiEl=addAI("",new Date().toISOString(),null,"");
   }
   const failReply=detail=>{
-    if(failed)return;failed=true;detail=String(detail||"模型请求失败");
+    if(failed||receivedDone)return;failed=true;detail=String(detail||"模型请求失败");
     showModelError(detail);markReplyFailed(failureUser,detail);
   };
   const rollbackFailedAI=()=>{
     if(!failed)return;
-    if(!savedState||opts.retryUnsaved&&!aiEl._id){aiEl.remove();return;}
+    const partialText=aiEl._versions[aiEl._vi]||"",partialReason=aiEl._reasonings[aiEl._vi]||"";
+    const retainPartial=wrap=>{
+      wrap._deliveryUnconfirmed=true;wrap._thinkingLive=false;setAIBody(wrap);renderReasoning(wrap);
+      const warning=document.createElement("div");warning.className="caption reply-save-warning";
+      warning.textContent="回复未完成 · 未收到保存确认，文字已暂留；刷新核对后再重试。";
+      wrap.appendChild(warning);
+    };
+    if(!savedState||opts.retryUnsaved&&!aiEl._id){
+      if(partialText.trim()||partialReason.trim())retainPartial(aiEl);else aiEl.remove();return;
+    }
     aiEl._versions=savedState.versions;aiEl._reasonings=savedState.reasonings;
     aiEl._models=savedState.models;aiEl._ats=savedState.ats;aiEl._thinkTimes=savedState.thinkTimes;aiEl._attachmentVersions=savedState.attachmentVersions;aiEl._artifactVersions=savedState.artifactVersions;aiEl._vi=savedState.vi;
     aiEl._thinkingLive=false;setAIBody(aiEl);renderReasoning(aiEl);renderAIActions(aiEl,isLastAI(aiEl));
+    if(partialText.trim()||partialReason.trim())retainPartial(addAI(partialText,new Date().toISOString(),null,partialReason));
   };
   const rb=aiEl.querySelector(".reasoning");
   const pill=makeThinkPill();chatLiveStatus.replaceChildren(pill);syncComposerSpace();scrollDown(true);
@@ -6762,7 +6772,7 @@ async function streamInto(url,body,opts={}){
         failReply((o.status?o.status+" · ":"")+(o.detail||"模型请求失败"));}
       // keep the think-trace expanded the whole way through, tuck it away only
       // once the reply is fully done (so the chain is never visually cut short)
-      else if(o.type==="done"&&!failed){aiEl._id=o.message_id;dropTool();finishReasoning();
+      else if(o.type==="done"){receivedDone=true;failed=false;aiEl._deliveryUnconfirmed=false;aiEl._id=o.message_id;dropTool();finishReasoning();
         aiEl._models[aiEl._vi]=o.model||"";aiEl._ats[aiEl._vi]=o.at||"";
         aiEl._thinkTimes[aiEl._vi]=o.think_ms??aiEl._thinkMs;
         aiEl._attachmentVersions[aiEl._vi]=o.attachments||[];
@@ -6778,8 +6788,10 @@ async function streamInto(url,body,opts={}){
         if(titlePending&&!o.partial)void generateConversationTitle(sessionId);
         if(gotReason&&(aiEl._reasonings[aiEl._vi]||"").trim()&&!rb.classList.contains("collapsed"))toggleReasoning(rb);}
     });
+    if(!receivedDone&&!failed)failReply("连接已结束，但没有收到保存确认；已收到的文字会保留，请刷新核对后再重试。");
   }catch(e){
-    if(e.name==="AbortError")toast("已停止");
+    if(receivedDone){failed=false;toast("回复已保存，页面状态更新未完成，请刷新核对。");}
+    else if(e.name==="AbortError"){toast("已停止");failReply("已停止接收，尚未收到保存确认；已收到的文字会保留。");}
     else failReply(e.message||String(e));
   }finally{
     if(pill.parentNode)pill.remove();dropTool();chatLiveStatus.replaceChildren();syncComposerSpace();rollbackFailedAI();setStreaming(false);refreshAllActions();
