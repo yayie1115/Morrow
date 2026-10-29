@@ -1648,12 +1648,47 @@ def _payload_size(payload):
         return 0
 
 
+def _bounded_tool_context(messages):
+    """Bound model-only tool text; immutable stored results and user text stay intact."""
+    def configured(name, default):
+        try:
+            return max(256, min(200000, int(os.environ.get(name, default))))
+        except (ValueError, TypeError):
+            return default
+    per_result = configured("TOOL_CONTEXT_RESULT_CHARS", 12000)
+    remaining = configured("TOOL_CONTEXT_TOTAL_CHARS", 48000)
+    bounded = copy.deepcopy(messages)
+    slots = []
+    for message in bounded:
+        if message.get("role") == "tool" and isinstance(message.get("content"), str):
+            slots.append((message, "content"))
+        elif isinstance(message.get("content"), list):
+            for block in message["content"]:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                if isinstance(block.get("content"), str):
+                    slots.append((block, "content"))
+                elif isinstance(block.get("content"), list):
+                    slots.extend((part, "text") for part in block["content"]
+                                 if isinstance(part, dict) and isinstance(part.get("text"), str))
+    # Prefer recent results; keep a short omission notice for older ones.
+    for index, (owner, key) in enumerate(reversed(slots)):
+        text = owner[key]
+        reserve = min(remaining, max(0, len(slots) - index - 1) * 64)
+        allowance = min(per_result, max(0, remaining - reserve))
+        if len(text) > allowance:
+            notice = "\n[工具结果超出本轮上下文预算，已截断；完整原文仍保留。请缩小检索范围后按需查询，不要据此断言没有记录。]"
+            owner[key] = (text[:max(0, allowance - len(notice))] + notice)[:allowance]
+        remaining -= len(owner[key])
+    return bounded
+
+
 def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta,
                         tool_definitions=None):
     """One streaming round. Yields ("reasoning"|"delta", text) for streamed
     content; returns (content_text, tool_calls) where tool_calls is a list of
     {id, name, arguments(JSON str)} accumulated from the stream (empty if none)."""
-    payload = {"model": model, "messages": messages, "stream": True,
+    payload = {"model": model, "messages": _bounded_tool_context(messages), "stream": True,
                "stream_options": {"include_usage": True}}
     resolved_tools = tool_definitions if tool_definitions is not None else tools.openai_tools()
     if resolved_tools:
@@ -2069,7 +2104,7 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
     payload = {
         "model": model,
         "system": _anthropic_system_payload(system_sections, cache_ttl, cache_mode),
-        "messages": payload_messages,
+        "messages": _bounded_tool_context(payload_messages),
         "stream": True,
     }
     if payload_tools:
