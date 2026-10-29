@@ -1,0 +1,46 @@
+/* sakie: white, mist blue and slate blue, inspired by the chosen wallpaper.
+   Colour-only overrides: existing layouts, custom wallpapers and alternate palettes stay intact. */
+:root:not([data-theme]),:root[data-theme="paper"]{
+  --surface:#f7faff;--surface-raised:#edf4ff;
+  --glass:rgba(255,255,255,.92);--glass-border:rgba(109,143,185,.25);
+  --bubble-user:rgba(218,232,252,.94);--bubble-user-solid:#dae8fc;
+  --bubble-ai:rgba(255,255,255,.96);--bubble-ai-solid:#ffffff;
+  --text-primary:#2d405b;--text-secondary:#596f8b;--text-on-bubble:#2d405b;
+  --accent:#4b6c94;--accent-strong:#3f5f87;--accent-soft:rgba(119,156,205,.17);
+  --note-bg:#f0f6ff;--note-text:#3f5778;--thinking:#e3edfa;
+  --border:rgba(106,139,182,.28);--shadow:rgba(69,103,146,.10);--shadow-elevated:rgba(69,103,146,.18);
+  --danger:#ac5263;--success:#417764;
+  --paper:#ffffff;--paper-soft:rgba(239,246,255,.78);--paper-fade:rgba(239,246,255,.20);
+  --paper-line:rgba(109,143,185,.32);--paper-line-strong:rgba(80,113,156,.43);
+  --paper-mark:rgba(126,161,207,.65);--paper-mark-soft:rgba(126,161,207,.26);--paper-field:rgba(255,255,255,.86);
+  --keepsake-stage:#eef4fc;--keepsake-photo:#ffffff;--keepsake-photo-back:#f2f7ff;
+  --keepsake-window:#f7faff;--keepsake-ink:#2d405b;--keepsake-note-ink:#425c7e;
+  --keepsake-caption:#60738d;--keepsake-bubble-ai:#edf4ff;
+  --keepsake-edge:rgba(109,143,185,.23);--keepsake-edge-shadow:rgba(69,103,146,.10);
+  --keepsake-drop-shadow:rgba(69,103,146,.14);--keepsake-comment-user:#4b6c94;
+  --keepsake-comment-assistant:#4a747f;--keepsake-comment-pencil:#647a96;--wall-dot:rgba(160,191,232,.42);
+  --foot-bg:#edf4ff;--foot-card:#ffffff;--foot-card-soft:#f5f9ff;--foot-tool:rgba(255,255,255,.72);
+  --foot-line:rgba(109,143,185,.27);--foot-ink:#2d405b;--foot-muted:#596f8b;
+  --foot-accent:#4b6c94;--foot-accent-strong:#3f5f87;--foot-accent-soft:rgba(119,156,205,.17);
+  --foot-shadow:rgba(69,103,146,.12);--foot-shadow-elevated:rgba(69,103,146,.20);
+  --foot-stain:rgba(126,161,207,.08);--foot-grain:rgba(69,103,146,.025);
+}
+:root[data-theme="dark"]{
+  --surface:#172231;--surface-raised:#223248;--glass:rgba(30,45,65,.94);--glass-border:rgba(151,181,221,.23);
+  --bubble-user:rgba(58,82,116,.94);--bubble-user-solid:#3a5274;--bubble-ai:rgba(38,56,79,.96);--bubble-ai-solid:#26384f;
+  --text-primary:#e8f1ff;--text-secondary:#afc2dc;--text-on-bubble:#e8f1ff;
+  --accent:#b0caed;--accent-strong:#c5dcfa;--accent-soft:rgba(151,181,221,.17);
+  --note-bg:#26384f;--note-text:#d4e4fb;--thinking:#2c405a;--border:rgba(151,181,221,.26);
+  --paper:#223248;--paper-soft:rgba(38,56,79,.78);--paper-fade:rgba(38,56,79,.20);
+  --paper-line:rgba(151,181,221,.30);--paper-line-strong:rgba(151,181,221,.45);
+  --paper-mark:rgba(151,181,221,.55);--paper-mark-soft:rgba(151,181,221,.22);--paper-field:rgba(30,45,65,.85);
+  --foot-bg:#172231;--foot-card:#26384f;--foot-card-soft:#223248;--foot-ink:#e8f1ff;--foot-muted:#afc2dc;
+  --foot-accent:#b0caed;--foot-accent-strong:#c5dcfa;--foot-line:rgba(151,181,221,.26);
+  --keepsake-stage:#172231;--keepsake-photo:#26384f;--keepsake-window:#223248;--keepsake-ink:#e8f1ff;
+  --keepsake-note-ink:#d4e4fb;--keepsake-caption:#afc2dc;--keepsake-bubble-ai:#26384f;
+}
+:root:not([data-theme]) #view-diary,:root[data-theme="paper"] #view-diary{
+  --diary-bg:#f7faff;--diary-detail-bg:#edf4ff;--diary-paper:#ffffff;--diary-ink:#2d405b;--diary-muted:#596f8b;
+  --diary-line:rgba(109,143,185,.26);--diary-user:#6489b8;--diary-assistant:#4a747f;
+}
+:root:not([data-theme]) .diary-send,:root:not([data-theme]) .diary-paper-edit-save{background:#4b6c94;color:#ffffff;}

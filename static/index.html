@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#eadcc6" id="themeColor">
+  <meta name="theme-color" content="#edf4ff" id="themeColor">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -2999,7 +2999,8 @@
       .moments-results{display:flex;flex-direction:column;gap:8px}.moments-result{width:100%;padding:12px 13px;border:1px solid var(--glass-border);border-radius:15px;text-align:left;background:color-mix(in srgb,var(--glass) 90%,transparent);color:var(--text-primary)}.moments-result-meta{display:flex;justify-content:space-between;gap:10px;color:var(--text-secondary);font:9px "JetBrains Mono",monospace}.moments-result-text{margin-top:6px;font-size:12px;line-height:1.55}.moments-result-text mark{background:var(--accent-soft);color:inherit}.moments-chooser{display:flex;flex-direction:column;gap:8px}.moments-chooser button{display:flex;justify-content:space-between;padding:11px 12px;border:1px solid var(--glass-border);border-radius:13px;background:var(--glass);color:var(--text-primary)}
       .moment-hit{padding:0 2px;border-radius:3px;background:color-mix(in srgb,var(--accent) 28%,transparent);color:inherit;box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 12%,transparent)}
     </style>
-  </head>
+    <link rel="stylesheet" href="/static/sakie-theme.css?v=blue-1">
+</head>
 <body>
 
   <div id="bootScreen" role="status" aria-live="polite" aria-label="Loading sakie" lang="en">
@@ -3828,7 +3829,7 @@
         <div class="glass-card">
           <div class="field"><label>主题</label>
             <div class="pref-chips" id="themeChips">
-              <button data-v="paper">暖黄</button><button data-v="green">雾绿</button><button data-v="pink">粉色</button>
+              <button data-v="paper">星蓝</button><button data-v="green">雾绿</button><button data-v="pink">粉色</button>
             </div>
             <div class="bg-actions">
               <button id="appBgPick">上传图片</button>
@@ -9785,11 +9786,11 @@ function appBgOpacity(){const n=parseInt(localStorage.getItem("appBgOpacity")||"
 function syncSystemBars(theme){
   /* Android standalone 不可靠地支持透明状态栏；始终给系统栏一个实色主题兜底。
      iOS 的 black-translucent 安装态会忽略这个值，继续让页面背景铺到状态栏下。 */
-  const colors={paper:"#eadcc6",dark:"#1e1b17",pink:"#ead4dc",green:"#d8e1d4","pink-dark":"#241d20","green-dark":"#1c211e"};
+  const colors={paper:"#edf4ff",dark:"#172231",pink:"#ead4dc",green:"#d8e1d4","pink-dark":"#241d20","green-dark":"#1c211e"};
   const m=$("#themeColor");if(m)m.content=colors[theme]||colors.paper;
   if(m&&$("#view-night")?.classList.contains("active")&&$("#view-night").classList.contains("footprint-mode")){
     const darkPaper=["dark","pink-dark","green-dark"].includes(document.documentElement.dataset.theme||"");
-    m.content=darkPaper?"#231f19":"#eee1cc";
+    m.content=getComputedStyle(document.documentElement).getPropertyValue("--foot-bg").trim()||(darkPaper?"#172231":"#edf4ff");
   }
   if(m&&$("#view-chat")?.classList.contains("active")){
     const topbar=getComputedStyle(document.documentElement).getPropertyValue("--surface-raised").trim();
