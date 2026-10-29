@@ -43,10 +43,11 @@ assert.equal(renders,2);
         self.assertIn('const visibleMessages=scrollToId?msgs:msgs.slice(-CHAT_RENDER_PAGE)',page)
         self.assertIn('log.scrollTop+=anchor.getBoundingClientRect().top-top',page)
 
-    def test_mobile_editors_prevent_focus_zoom_without_blocking_pinch_zoom(self):
+    def test_mobile_editors_prevent_focus_zoom_and_use_fixed_viewport(self):
         page=Path("static/index.html").read_text(encoding="utf-8")
         self.assertIn('textarea,select,[contenteditable="true"]{font-size:max(16px,1em)!important;}',page)
         self.assertIn('font-size:max(16px,var(--chat-fs,16px))!important;',page)
         viewport=page.split('name="viewport"',1)[1].split('>',1)[0]
-        self.assertNotIn("maximum-scale",viewport)
-        self.assertNotIn("user-scalable=no",viewport)
+        self.assertIn("minimum-scale=1",viewport)
+        self.assertIn("maximum-scale=1",viewport)
+        self.assertIn("user-scalable=no",viewport)
