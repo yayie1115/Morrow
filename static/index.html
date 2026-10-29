@@ -7,8 +7,8 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Morrow">
-  <link rel="manifest" href="/static/manifest.json?v=portrait-1">
+  <meta name="apple-mobile-web-app-title" content="sakie">
+  <link rel="manifest" href="/static/manifest.json?v=sakie-1">
   <link rel="icon" type="image/png" sizes="1254x1254" href="/static/icons/home-logo.png?v=portrait-1">
   <link rel="apple-touch-icon" sizes="1254x1254" href="/static/icons/home-logo.png?v=portrait-1">
   <!-- 字体（jsDelivr，国内可达）：霞鹜文楷只给便签，EB Garamond 给数字/英文，
@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.1.1/index.css" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/caveat@5.1.1/index.css" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.1.1/index.css" media="print" onload="this.media='all'">
-  <title>Morrow</title>
+  <title>sakie</title>
   <script>/* 偏好：开屏前就把主题/字号定好，避免先白后变的闪烁 */(function(){try{
     /* 旧版把夜间存在 prefTheme；迁移后让拉绳灯接管，底色回到暖黄。 */
     if(localStorage.getItem("prefTheme")==="dark"){
@@ -3002,7 +3002,7 @@
   </head>
 <body>
 
-  <div id="bootScreen" role="status" aria-live="polite" aria-label="Loading Morrow" lang="en">
+  <div id="bootScreen" role="status" aria-live="polite" aria-label="Loading sakie" lang="en">
     <div class="loading-paper" aria-hidden="true">
       <span class="loading-paper-body"></span>
       <span class="loading-paper-corner"></span>
@@ -3023,7 +3023,7 @@
         <path d="M6 0C7 5 8 6 12 8c-4 2-5 3-6 8C5 11 4 10 0 8c4-2 5-3 6-8Z"/>
       </svg>
       <div class="login-heading">
-        <h1 id="loginTitle" class="login-wordmark">morrow</h1>
+        <h1 id="loginTitle" class="login-wordmark">sakie</h1>
         <p class="login-inscription">A little room for today.</p>
       </div>
       <div class="pw-row">
@@ -3804,7 +3804,7 @@
               <div class="tts-advanced-note">这些参数会随试听请求发送；不同模型可能忽略其中一部分，实际效果以耳朵听到的为准。</div>
             </div>
           </details>
-          <div class="tts-note">密钥只由 Morrow 后端送往语音服务；这里暂时只生成试听，不会进入聊天或长期保存。</div>
+          <div class="tts-note">密钥只由 sakie 后端送往语音服务；这里暂时只生成试听，不会进入聊天或长期保存。</div>
           <div class="tts-connect-row"><span class="tts-connect-state" id="ttsConnectState">还没有检查连接</span><button class="mini-btn" id="ttsCheck" type="button">检查连接</button><button class="btn-primary" id="ttsSave" type="button">保存</button></div>
         </div>
         <div class="glass-card tts-card">
@@ -4148,7 +4148,7 @@
           </div></div>
         </div>
         <div class="data-sensitive">完整备份包含供应商 API Key 与 MCP 配置，请把它当作私密文件保存。</div>
-        <div class="data-sensitive" id="nookVersion">Morrow · 读取版本中…</div>
+        <div class="data-sensitive" id="nookVersion">sakie · 读取版本中…</div>
         <button class="btn-ghost data-logout" id="logoutBtn">退出登录</button>
       </div>
     </section>
@@ -4490,7 +4490,7 @@
         <div class="import-preview-stat"><strong id="rikkahubPreviewImages">0</strong><span>张图片</span></div>
         <div class="import-preview-stat"><strong>1</strong><span>个新对话</span></div>
       </div>
-      <div class="import-preview-warning">RikkaHub 没有逐条消息时间。导入后会统一使用文件里的导出时间，不会改动 Morrow 现有对话。</div>
+      <div class="import-preview-warning">RikkaHub 没有逐条消息时间。导入后会统一使用文件里的导出时间，不会改动 sakie 现有对话。</div>
     </div>
     <div class="export-chat-foot"><button class="btn-ghost" id="rikkahubPreviewCancel">取消</button><button class="btn-primary" id="rikkahubPreviewGo">导入</button></div>
   </div>
@@ -9040,8 +9040,8 @@ function showSetPanel(name){
 async function loadNookVersion(){
   const target=$("#nookVersion");if(!target)return;
   try{const response=await api("/api/version"),data=await response.json();if(!response.ok)throw new Error();
-    target.textContent="Morrow "+(data.version||"v0.1.0");
-  }catch{target.textContent="Morrow · 暂时没有读到版本";}
+    target.textContent="sakie "+(data.version||"v0.1.0");
+  }catch{target.textContent="sakie · 暂时没有读到版本";}
 }
 $$(".set-entry").forEach(b=>b.onclick=()=>navigateSetPanel(b.dataset.panel));
 $$(".set-back").forEach(b=>b.onclick=()=>backToAppLevel(1,()=>showSetPanel(null)));
