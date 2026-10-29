@@ -51,3 +51,34 @@ assert.equal(renders,2);
         self.assertIn("minimum-scale=1",viewport)
         self.assertIn("maximum-scale=1",viewport)
         self.assertIn("user-scalable=no",viewport)
+
+    def test_initial_chat_warmup_deduplicates_requests(self):
+        if not shutil.which("node"):
+            self.skipTest("Node.js unavailable")
+        page=Path("static/index.html").read_text(encoding="utf-8")
+        code=page.split("let initialSessionList=null",1)[1].split("const EMPTY_LINES",1)[0]
+        code="let initialSessionList=null"+code
+        harness=r"""
+const assert=require('node:assert/strict');
+let sessionId=null,loads=0,calls=[];const CHAT_RENDER_PAGE=80;
+const title={};const $=()=>title;
+const api=async(path)=>{calls.push(path);return {ok:true,json:async()=>[{id:7,title:'Synthetic'}]};};
+const loadMessages=async()=>{loads++;};const showEmpty=()=>{};
+"""
+        checks=r"""
+(async()=>{
+ warmInitialChat();warmInitialChat();
+ await Promise.all([ensureSession(),ensureSession()]);
+ assert.equal(calls.filter(p=>p==='/api/chat/sessions').length,1);
+ assert.equal(calls.filter(p=>p.includes('/messages/7')).length,1);
+ assert.equal(calls.filter(p=>p.includes('/window/7')).length,1);
+ assert.equal(loads,1);assert.equal(sessionId,7);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+        subprocess.run(["node","-e",harness+code+checks],check=True)
+
+    def test_home_data_does_not_block_app_reveal(self):
+        page=Path("static/index.html").read_text(encoding="utf-8")
+        enter=page.split("async function enterApp(",1)[1].split("async function checkAuth",1)[0]
+        self.assertNotIn("settleCore(homeReady)",enter)
+        self.assertIn("warmInitialChat()",enter)

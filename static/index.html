@@ -5041,12 +5041,15 @@ async function enterApp(fromLogin=false){
   initAppNavigation();
   const homeReady=showView("home");loadProviders();startProactivePolling();
   if(fromLogin){
-    await Promise.all([settleCore(homeReady),pause(reducedMotion?0:1120)]);
+    await pause(reducedMotion?0:180);
     const login=$("#login");login.classList.add("leaving");
     setTimeout(()=>{login.style.display="none";login.classList.remove("success","leaving");},reducedMotion?0:360);
   }else{
-    await settleCore(homeReady);await dismissBoot();
+    await dismissBoot();
   }
+  // Home details populate independently; they must not hold the app behind a loading mask.
+  void Promise.resolve(homeReady).catch(()=>{});
+  setTimeout(()=>{if(!sessionId)warmInitialChat();},250);
   void openPushDestination();
 }
 async function checkAuth(){
@@ -5910,9 +5913,23 @@ document.addEventListener("click",()=>setWallCalendar(false));
 })();
 
 /* ---------- chat ---------- */
+let initialSessionList=null,initialChatPage=null;
+function warmInitialChat(){
+  if(sessionId)return;
+  if(!initialSessionList)initialSessionList=api("/api/chat/sessions").then(r=>{if(!r.ok)throw new Error();return r.json();});
+  initialSessionList.then(list=>{
+    if(!sessionId&&list.length&&!initialChatPage){
+      const id=list[0].id;
+      initialChatPage={id,at:Date.now(),response:api("/api/chat/messages/"+id+"?limit="+CHAT_RENDER_PAGE).catch(()=>null),
+        window:api("/api/chat/window/"+id+"?recent=20").catch(()=>null)};
+    }
+  }).catch(()=>{initialSessionList=null;});
+}
 async function ensureSession(){
   if(sessionId)return;
-  const list=await(await api("/api/chat/sessions")).json();
+  warmInitialChat();
+  const list=await initialSessionList;
+  if(sessionId)return;
   if(list.length){sessionId=list[0].id;$("#chatTitle").textContent=list[0].title||"Morrow";await loadMessages();}
   else showEmpty();
 }
@@ -5948,10 +5965,13 @@ async function loadEarlierMessages(){
 async function loadMessages(scrollToId){
   const requestedSession=sessionId;
   const favoritesReady=syncFavorites();
-  const [messageResponse,windowResponse]=await Promise.all([
-    api("/api/chat/messages/"+requestedSession+(scrollToId?"":"?limit="+CHAT_RENDER_PAGE)),
-    api("/api/chat/window/"+requestedSession+"?recent=20").catch(()=>null)
+  const warm=!scrollToId&&initialChatPage?.id===requestedSession&&Date.now()-initialChatPage.at<15000?initialChatPage:null;
+  initialChatPage=null;
+  const [cachedResponse,windowResponse]=await Promise.all([
+    warm?warm.response:api("/api/chat/messages/"+requestedSession+(scrollToId?"":"?limit="+CHAT_RENDER_PAGE)),
+    warm?warm.window:api("/api/chat/window/"+requestedSession+"?recent=20").catch(()=>null)
   ]);
+  const messageResponse=cachedResponse||await api("/api/chat/messages/"+requestedSession+(scrollToId?"":"?limit="+CHAT_RENDER_PAGE));
   if(!messageResponse.ok)throw new Error("聊天记录暂时没有读取成功");
   const msgs=await messageResponse.json();
   const windowInfo=windowResponse?.ok?await windowResponse.json():null;
@@ -5993,7 +6013,7 @@ async function loadMessages(scrollToId){
   }
   scrollDown(true);
 }
-function newChat(){sessionId=null;showEmpty();$("#chatTitle").textContent="Morrow";
+function newChat(){initialSessionList=null;initialChatPage=null;sessionId=null;showEmpty();$("#chatTitle").textContent="Morrow";
   COMPRESSION_STATUS=null;attachments=[];renderAttach();cancelEdit();$("#input").value="";autoGrow();$("#input").focus();}
 
 async function loadCompressionStatus(renderBoundary=false){
