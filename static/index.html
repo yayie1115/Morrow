@@ -4911,8 +4911,9 @@ function showView(name){
   if(name==="home")ready=loadHome();
   if(name==="cycle")loadCycle();
   if(name==="diary")ready=loadDiary();
-  if(name==="chat"){const chatReady=ensureSession();syncComposerSpace();if(!suppressChatAutofocus)setTimeout(()=>$("#input").focus(),100);
-    Promise.resolve(chatReady).then(()=>syncProactiveStatus(true));}
+  if(name==="chat"){const chatReady=ensureSession();requestAnimationFrame(syncComposerSpace);
+    // Entering Chat should paint first, not open the keyboard and resize the viewport.
+    Promise.resolve(chatReady).then(()=>setTimeout(()=>{if($("#view-chat").classList.contains("active"))void syncProactiveStatus(true);},250));}
   if(name==="memory")loadMemory();
   if(name==="night")loadNight();
   if(name==="settings")loadSettings();
@@ -5923,29 +5924,39 @@ function showEmpty(){
   $("#log").innerHTML='<div class="placeholder-note" style="margin-top:30vh">'+
     '<span class="cn">'+escHtml(cn)+'</span></div>';
 }
-let earlierMessages=[],historySession=null,loadingEarlier=false;
+let historyHasMore=false,historyBefore=null,historySession=null,loadingEarlier=false;
 const CHAT_RENDER_PAGE=80;
 function renderStoredMessage(m){return m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);}
-function loadEarlierMessages(){
-  const log=$("#log");if(loadingEarlier||!earlierMessages.length||historySession!==sessionId)return;
-  loadingEarlier=true;const anchor=log.querySelector(".msg"),top=anchor?.getBoundingClientRect().top;
-  const fragment=document.createDocumentFragment();
-  earlierMessages.splice(-CHAT_RENDER_PAGE).forEach(m=>fragment.appendChild(renderStoredMessage(m)));
-  log.insertBefore(fragment,anchor);refreshDailyTimeDividers();renderCompressionBoundary();
-  if(anchor)log.scrollTop+=anchor.getBoundingClientRect().top-top;
-  loadingEarlier=false;
+async function loadEarlierMessages(){
+  const log=$("#log");if(loadingEarlier||!historyHasMore||historySession!==sessionId)return;
+  loadingEarlier=true;const requestedSession=sessionId,before=historyBefore;
+  try{
+    const response=await api("/api/chat/messages/"+requestedSession+"?limit="+CHAT_RENDER_PAGE+"&before="+before);
+    if(!response.ok)throw new Error("历史暂时没有读取成功");
+    const messages=await response.json();
+    if(sessionId!==requestedSession||historyBefore!==before)return;
+    const anchor=log.querySelector(".msg"),top=anchor?.getBoundingClientRect().top;
+    const fragment=document.createDocumentFragment();
+    messages.forEach(m=>fragment.appendChild(renderStoredMessage(m)));
+    log.insertBefore(fragment,anchor);refreshDailyTimeDividers();renderCompressionBoundary();
+    if(anchor)log.scrollTop+=anchor.getBoundingClientRect().top-top;
+    historyHasMore=messages.length===CHAT_RENDER_PAGE;
+    if(messages.length)historyBefore=messages[0].id;
+  }catch{toast("旧消息暂时没读到，向上滚动可重试");}
+  finally{loadingEarlier=false;}
 }
 async function loadMessages(scrollToId){
   const requestedSession=sessionId;
-  await syncFavorites();
+  const favoritesReady=syncFavorites();
   const [messageResponse,windowResponse]=await Promise.all([
-    api("/api/chat/messages/"+sessionId),
-    api("/api/chat/window/"+sessionId+"?recent=20").catch(()=>null)
+    api("/api/chat/messages/"+requestedSession+(scrollToId?"":"?limit="+CHAT_RENDER_PAGE)),
+    api("/api/chat/window/"+requestedSession+"?recent=20").catch(()=>null)
   ]);
+  if(!messageResponse.ok)throw new Error("聊天记录暂时没有读取成功");
   const msgs=await messageResponse.json();
   const windowInfo=windowResponse?.ok?await windowResponse.json():null;
   if(sessionId!==requestedSession)return;
-  historySession=sessionId;earlierMessages=scrollToId?[]:msgs.slice(0,-CHAT_RENDER_PAGE);
+  historySession=sessionId;historyHasMore=!scrollToId&&msgs.length===CHAT_RENDER_PAGE;historyBefore=msgs[0]?.id||null;
   const visibleMessages=scrollToId?msgs:msgs.slice(-CHAT_RENDER_PAGE);
   $("#log").innerHTML="";
   if(windowInfo?.continued_from){
@@ -5970,9 +5981,12 @@ async function loadMessages(scrollToId){
     const users=$("#log").querySelectorAll(".row-user");
     if(users.length)markReplyFailed(users[users.length-1],"这条消息还没有收到回答");
   }
-  await loadCompressionStatus(true);
   refreshAllActions();syncComposerSpace();
-  await markProactiveReadIfHere();
+  requestAnimationFrame(()=>{
+    if(sessionId!==requestedSession)return;
+    void loadCompressionStatus(true);void markProactiveReadIfHere();
+    favoritesReady.then(()=>{if(sessionId===requestedSession){$("#log").querySelectorAll(".msg").forEach(applyFavState);refreshAllActions();}});
+  });
   if(scrollToId){
     const el=[...$("#log").children].find(c=>c._id===scrollToId);
     if(el){jumpTo(el);return;}
@@ -5984,7 +5998,8 @@ function newChat(){sessionId=null;showEmpty();$("#chatTitle").textContent="Morro
 
 async function loadCompressionStatus(renderBoundary=false){
   if(!sessionId){COMPRESSION_STATUS=null;return null;}
-  try{const r=await api("/api/chat/compression/"+sessionId);COMPRESSION_STATUS=r.ok?await r.json():null;}catch{COMPRESSION_STATUS=null;}
+  const target=sessionId;
+  try{const r=await api("/api/chat/compression/"+target);const data=r.ok?await r.json():null;if(sessionId!==target)return null;COMPRESSION_STATUS=data;}catch{if(sessionId!==target)return null;COMPRESSION_STATUS=null;}
   const settingText=$("#compressSettingText");
   if(settingText)settingText.textContent=COMPRESSION_STATUS?.has_summary?
     ("已整理前 "+COMPRESSION_STATUS.covered_message_count+" 条 · "+(COMPRESSION_STATUS.recent_message_count?

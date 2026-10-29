@@ -2741,15 +2741,28 @@ def _clean_attachments(raw):
 @require_auth
 def get_messages(session_id):
     db = get_db()
-    rows = db.execute(
-        "SELECT id, role, content, attachments, reasoning, reasoning_ms, versions, active, "
-        "proactive, proactive_unread, created_at FROM messages "
-        "WHERE session_id = ? AND hidden=0 ORDER BY id ASC",
-        (session_id,),
-    ).fetchall()
-    artifact_rows = db.execute(
-        "SELECT * FROM message_artifacts WHERE session_id=? AND status='ready' ORDER BY id", (session_id,)
-    ).fetchall()
+    limit = request.args.get("limit", type=int)
+    before = request.args.get("before", type=int)
+    if ("limit" in request.args and (limit is None or not 1 <= limit <= 200)) or ("before" in request.args and (before is None or before < 1)):
+        return jsonify({"error": "无效的历史分页参数"}), 400
+    where, params = "session_id = ? AND hidden=0", [session_id]
+    if before is not None:
+        where += " AND id < ?"
+        params.append(before)
+    sql = ("SELECT id, role, content, attachments, reasoning, reasoning_ms, versions, active, "
+           "proactive, proactive_unread, created_at FROM messages WHERE " + where)
+    if limit is not None:
+        rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()[::-1]
+    else:
+        rows = db.execute(sql + " ORDER BY id ASC", params).fetchall()
+    artifact_rows = []
+    if rows:
+        ids = [row["id"] for row in rows]
+        # A bounded range also preserves the unpaginated API without SQLite variable limits.
+        artifact_rows = db.execute(
+            "SELECT * FROM message_artifacts WHERE session_id=? AND message_id>=? AND message_id<=? "
+            "AND status='ready' ORDER BY id", (session_id, min(ids), max(ids))
+        ).fetchall()
     artifacts_by_message = {}
     for artifact in artifact_rows:
         artifacts_by_message.setdefault(artifact["message_id"], []).append(_artifact_dict(artifact))

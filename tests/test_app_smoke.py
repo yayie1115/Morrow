@@ -36,6 +36,31 @@ class AppSmokeTest(unittest.TestCase):
         tools.DB_PATH = self.old_paths["tools"]
         shutil.rmtree(self.root, ignore_errors=True)
 
+    def test_chat_history_pages_preserve_order_scope_and_legacy_response(self):
+        client = app.app.test_client()
+        self.assertEqual(client.get("/api/chat/messages/1?limit=2").status_code, 401)
+        client.post("/api/login", json={"password": app.AUTH_PASSWORD})
+        with app.app.app_context():
+            db = app.get_db()
+            first = db.execute("INSERT INTO sessions(title) VALUES ('Synthetic A')").lastrowid
+            second = db.execute("INSERT INTO sessions(title) VALUES ('Synthetic B')").lastrowid
+            ids = []
+            for i in range(7):
+                ids.append(db.execute("INSERT INTO messages(session_id,role,content) VALUES (?,?,?)", (first, "user", str(i))).lastrowid)
+                db.execute("INSERT INTO messages(session_id,role,content) VALUES (?,?,?)", (second, "user", "other"))
+            db.execute("UPDATE messages SET hidden=1 WHERE id=?", (ids[3],))
+            db.commit()
+        path = f"/api/chat/messages/{first}"
+        all_rows = client.get(path).get_json()
+        self.assertEqual([r["id"] for r in all_rows], ids[:3] + ids[4:])
+        recent = client.get(path + "?limit=2").get_json()
+        self.assertEqual([r["id"] for r in recent], ids[-2:])
+        older = client.get(path + f"?limit=2&before={recent[0]['id']}").get_json()
+        self.assertEqual([r["id"] for r in older], [ids[2], ids[4]])
+        self.assertEqual(client.get(path + f"?limit=2&before={ids[0]}").get_json(), [])
+        for query in ("limit=0", "limit=201", "limit=x", "before=-1", "before=x"):
+            self.assertEqual(client.get(path + "?" + query).status_code, 400)
+
     @staticmethod
     def _local_model_stream(session_id, **_kwargs):
         args = {"text": "冒烟测试待办"}
