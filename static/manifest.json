@@ -13,22 +13,10 @@
   "theme_color": "#eadcc6",
   "icons": [
     {
-      "src": "/static/icons/icon-192.png?v=cat-1",
-      "sizes": "192x192",
+      "src": "/static/icons/home-logo.png?v=portrait-1",
+      "sizes": "1254x1254",
       "type": "image/png",
       "purpose": "any"
-    },
-    {
-      "src": "/static/icons/icon-512.png?v=cat-1",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/static/icons/maskable-512.png?v=cat-1",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
     }
   ]
 }

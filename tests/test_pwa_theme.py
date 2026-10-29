@@ -34,11 +34,11 @@ class PwaThemeTest(unittest.TestCase):
         self.assertIn("nook-pwa-v2", worker)
         self.assertIn("caches.delete", worker)
 
-    def test_cat_icon_assets_cover_pwa_ios_favicon_and_notification_sizes(self):
+    def test_icon_assets_cover_pwa_ios_favicon_and_notification_sizes(self):
         manifest = json.loads(Path("static/manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "Morrow")
         self.assertEqual(manifest["id"], "/")
-        self.assertEqual({item["purpose"] for item in manifest["icons"]}, {"any", "maskable"})
+        self.assertEqual({item["purpose"] for item in manifest["icons"]}, {"any"})
         for icon in manifest["icons"]:
             name = urlsplit(icon["src"]).path.lstrip("/")
             blob = Path(name).read_bytes()
@@ -50,7 +50,7 @@ class PwaThemeTest(unittest.TestCase):
             self.assertEqual(struct.unpack(">II", blob[16:24]), (size, size))
         page = Path("static/index.html").read_text(encoding="utf-8")
         self.assertIn('rel="apple-touch-icon"', page)
-        self.assertIn('/static/icons/favicon-32.png', page)
+        self.assertIn('/static/icons/home-logo.png?v=portrait-1', page)
         worker = Path("static/sw.js").read_text(encoding="utf-8")
         self.assertIn('/static/icons/badge-96.png', worker)
         self.assertNotRegex(worker, r"(?m)^\s*icon\s*:")
