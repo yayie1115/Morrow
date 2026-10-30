@@ -1148,6 +1148,17 @@ class _ThinkSplitter:
     )
     MARKER_WINDOW = 100      # 只在开头这段里找，避免正文深处误伤
     MARKER_JUNK = 10         # 标记同一行前面最多容忍几个杂字符
+    # 独白常见的收尾是英文计划句，紧接着就是中文正文（没有空行）。
+    TAIL_STEM = re.compile(
+        r"(?:let['’]?s|let us|let me|i['’]?ll|i will|i['’]?m going to|"
+        r"now|okay|ok|alright|time to|keep it)\b",
+        re.IGNORECASE,
+    )
+    TAIL_WINDOW = 200        # 计划句到句号的最长跨度
+    CJK = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+    # 有些独白没有开头标记，只以一个 "]正文" 收尾；这类只能先缓冲一段再判断。
+    BRACKET_WINDOW = int(os.environ.get("THINK_BRACKET_WINDOW", "280"))
+    BRACKET_MIN = 60         # 折叠掉的内容太少就不值得切
 
     def __init__(self, detect_markers=False):
         self.buf = ""
@@ -1213,6 +1224,71 @@ class _ThinkSplitter:
         self.in_think = True
         self.marker_think = True
 
+    def _tail_cut(self, text):
+        """最后一个「英文计划句 → 正文起始（第一个中文）」的位置；没有就返回 None。
+
+        独白常常这样收尾：``… Let's write the response.这次三项…``；
+        也可能夹着几个英文词：``… Let's refine! No fluff确实是这样。``。
+        所以不要求句号后面立刻是中文，只要求"计划句到第一个中文之间出现过句末标点"。
+        """
+        best = None
+        for match in self.TAIL_STEM.finditer(text):
+            window = text[match.end(): match.end() + self.TAIL_WINDOW]
+            cjk = None
+            for index, char in enumerate(window):
+                if self.CJK.match(char):
+                    cjk = index
+                    break
+            if cjk is None or cjk == 0:
+                continue
+            if not any(char in ".!?" for char in window[:cjk]):
+                continue
+            best = match.end() + cjk
+        return best
+
+    def _bracket_cut(self, text):
+        """最后一个「] / 】 后面紧跟中文」的位置；排除 [1]、[]() 这类。
+
+        没有开头标记的独白常常这样收尾：``…胃里消食了没。]感觉到了…``。
+        """
+        best = None
+        for index, char in enumerate(text):
+            if char not in "]】":
+                continue
+            before = text[index - 1] if index else ""
+            if before and not (self.CJK.match(before) or before in "。！？…」』）)"):
+                continue          # 引用编号 [1] / 数组下标 arr[0] 之类排除掉
+            rest = text[index + 1:]
+            stripped = rest.lstrip(" \t\n")
+            if not stripped or not self.CJK.match(stripped):
+                continue
+            if stripped[0] in "([":
+                continue          # markdown 链接 []()
+            best = index + 1 + (len(rest) - len(stripped))
+        return best
+
+    # 这些开头的符号是有意义的（引号、括号、省略号），不当作装饰删掉
+    KEEP_PREFIX = "「『【（([“‘《〈…·—－、,，。！？"
+
+    def _drop_decoration(self):
+        """去掉正文开头的装饰符号：单独一行，或紧贴文字的一两个 emoji。
+
+        只删"后面还有真正文字"的情况；整条就一个符号（比如「？」「……」）要原样保留。
+        """
+        head, sep, rest = self.buf.partition("\n")
+        if sep and len(head.strip()) <= 6 and not re.search(
+                r"[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", head):
+            tail = rest.lstrip("\n")
+            if re.search(r"[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", tail):
+                self.buf = tail
+            return
+        match = re.match(
+            r"^([^\w\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{1,3})(?=[\u4e00-\u9fff])",
+            self.buf,
+        )
+        if match and not any(char in self.KEEP_PREFIX for char in match.group(1)):
+            self.buf = self.buf[len(match.group(1)):]
+
     @staticmethod
     def _first(s, tags):
         best, bt = -1, None
@@ -1234,19 +1310,39 @@ class _ThinkSplitter:
 
     def feed(self, text):
         self.buf += text
+        pre = None
         if not self.decided:
-            # 标记可能带乱字符前缀：一旦能认出来就立刻判；否则等首行够长或满窗口。
-            # 首行很短时先别定案（独白标记可能落在第二行）。
-            first_line = self.buf.split("\n", 1)[0]
+            # 标记可能带乱字符前缀：一旦能认出来就立刻判；没有标记时先攒一小段，
+            # 因为有些独白只用一个 "]" 收尾，必须看到后面的正文才能判断。
             if len(self.buf) >= 8 and self._find_marker(self.buf):
                 self._decide_marker()
             elif any(tag in self.buf for tag in self.OPENS):
                 self._decide_marker()
-            elif len(self.buf) >= self.MARKER_WINDOW or ("\n" in self.buf and len(first_line) >= 8):
-                self._decide_marker()
             else:
-                return []
+                # 草稿式独白：只要出现「英文计划句」或「] 后接正文」，前面就全是草稿。
+                # 方括号要求前面有足够长的独白，避免把「【重点】正文」这种开头误切。
+                cuts = []
+                bracket = self._bracket_cut(self.buf)
+                if bracket and bracket >= self.BRACKET_MIN:
+                    cuts.append(bracket)
+                tail = self._tail_cut(self.buf)
+                if tail:
+                    cuts.append(tail)
+                if cuts:
+                    cut = max(cuts)
+                    pre, self.buf = self.buf[:cut], self.buf[cut:]
+                    self.decided = True
+                    self.in_think = False
+                    self.marker_think = False
+                elif len(self.buf) >= self.BRACKET_WINDOW:
+                    self._decide_marker()
+                else:
+                    return []
+        if self.decided and not self.in_think:
+            self._drop_decoration()
         out = []
+        if pre:
+            out.append(("reasoning", pre))
         if self.pending_think is not None:
             # 标记之前的内容照常显示，标记之后的部分交给下面的边界逻辑
             if self.buf:
@@ -1271,11 +1367,23 @@ class _ThinkSplitter:
                     self.in_think = False
                     self.marker_think = False
                     self.marker_close = ""
+                    self._drop_decoration()
+                    continue
+                # 先看是不是「英文计划句 → 紧跟中文正文」收尾
+                tail_cut = self._tail_cut(self.buf)
+                if tail_cut is not None:
+                    if tail_cut > 0:
+                        out.append(("reasoning", self.buf[:tail_cut]))
+                    self.buf = self.buf[tail_cut:]
+                    self.in_think = False
+                    self.marker_think = False
+                    self._drop_decoration()
                     continue
                 # 否则：第一个空行就是正文开始的地方
                 idx = self.buf.find("\n\n")
                 if idx == -1:
-                    hold = 1 if self.buf.endswith("\n") else 0
+                    # 留一截尾巴做句式判断，别把 "Let's ... ." 提前吐出去
+                    hold = min(len(self.buf), self.TAIL_WINDOW // 2)
                     safe = len(self.buf) - hold
                     if safe > 0:
                         out.append(("reasoning", self.buf[:safe]))
@@ -1286,6 +1394,7 @@ class _ThinkSplitter:
                 self.buf = self.buf[idx + 2:]
                 self.in_think = False
                 self.marker_think = False
+                self._drop_decoration()
                 continue
             tags = self.CLOSES if self.in_think else self.OPENS
             kind = "reasoning" if self.in_think else "delta"
@@ -1313,6 +1422,12 @@ class _ThinkSplitter:
             self.pending_think = None
         if not self.buf:
             return out
+        if self.marker_think and self.in_think:
+            # 一直没找到边界：宁可整条当正文（漏切），也不把回复吞掉。
+            self.in_think = False
+            self.marker_think = False
+        if not self.in_think:
+            self._drop_decoration()
         kind = "reasoning" if self.in_think else "delta"
         out.append((kind, self.buf))
         self.buf = ""
