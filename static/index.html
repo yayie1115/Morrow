@@ -2960,6 +2960,14 @@
     body.in-chat #app{position:fixed;left:0;right:0;
       top:var(--chat-viewport-top,0px);height:var(--chat-viewport-height,100dvh);}
     body.in-chat.chat-keyboard-open .composer{padding-bottom:7px;}
+    /* Daily Chat uses normal flex flow: the composer occupies space exactly once. */
+    body.daily-chat #view-chat{padding:0;}
+    body.daily-chat .chat-topbar{position:relative;flex:0 0 auto;}
+    body.daily-chat #log{padding-top:10px;padding-bottom:8px;}
+    body.daily-chat .composer{position:relative;flex:0 0 auto;}
+    html:has(body.in-chat){overflow:hidden;}
+    body.in-chat{overflow:hidden;}
+
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -4788,7 +4796,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
-<script src="/static/chat-viewport.js?v=2"></script>
+<script src="/static/chat-viewport.js?v=3"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -6118,6 +6126,7 @@ async function loadMessages(scrollToId){
     if(el){jumpTo(el);return;}
   }
   scrollDown(true);
+  window.sakieChatViewport?.loaded();
 }
 function newChat(){initialSessionList=null;initialChatPage=null;sessionId=null;showEmpty();$("#chatTitle").textContent="Morrow";
   COMPRESSION_STATUS=null;resetComposerAttachments();cancelEdit();$("#input").value="";autoGrow();$("#input").focus();}
@@ -6698,7 +6707,12 @@ function plusPopFlowHeight(){
 }
 // keep a gap below the last message equal to the (variable) composer height, so
 // a long draft never hides the latest reply — gives the bar room to "float"
-function syncComposerSpace(){const h=composerEl?composerEl.offsetHeight:80;
+function syncComposerSpace(){
+  if(document.body.classList.contains("daily-chat")){
+    if($("#log").style.paddingBottom!=="8px")$("#log").style.paddingBottom="8px";
+    return;
+  }
+  const h=composerEl?composerEl.offsetHeight:80;
   const covered=plusPopFlowHeight();
   const breathing=document.body.classList.contains("daily-chat")?8:28;
   const base=Math.max(52,h-covered)+breathing;
@@ -7636,6 +7650,7 @@ function showPlusPage(page="main"){$("#plusMain").hidden=page!=="main";$("#stick
 let plusPopAnimation=null;
 let plusSpaceAnimation=null;
 function settlePlusBottomSpace(duration=300){
+  if(document.body.classList.contains("daily-chat")){plusBottomSpace=false;syncComposerSpace();return;}
   if(!plusBottomSpace)return;
   if(plusSpaceAnimation)cancelAnimationFrame(plusSpaceAnimation);
   const log=$("#log"),startPad=parseFloat(getComputedStyle(log).paddingBottom)||0;
