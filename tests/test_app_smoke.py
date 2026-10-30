@@ -161,6 +161,26 @@ class AppSmokeTest(unittest.TestCase):
             version.pop("tool_log",None)
             self.assertEqual(app._version_tool_log(db,done["message_id"],version),[])
 
+    def test_vps_usage_summary_preserves_selected_accounting_contract(self):
+        result=app._usage_summary(20,10,80,0)
+        self.assertEqual(result["input_tokens"],20)
+        self.assertEqual(result["output_tokens"],10)
+        self.assertEqual(result["tokens"],110)
+        self.assertEqual(result["cache_rate"],.8)
+        self.assertEqual(app._usage_summary()["cache_rate"],0)
+
+    def test_generated_reply_usage_is_available_after_history_reload(self):
+        client=app.app.test_client();client.post("/api/login",json={"password":app.AUTH_PASSWORD})
+        stream=iter([("delta","Synthetic metered reply"),("usage",{"provider":{},"model":"synthetic","usage":{"prompt_tokens":1000,"completion_tokens":115,"prompt_cache_hit_tokens":839}})])
+        with mock.patch("chat_engine.stream_chat",return_value=stream):
+            r=client.post("/api/chat/send",json={"message":"Synthetic usage request"})
+            events=[json.loads(line[5:]) for line in r.get_data(as_text=True).splitlines() if line.startswith("data:")]
+        done=next(e for e in events if e["type"]=="done")
+        sid=next(e["session_id"] for e in events if e["type"]=="session")
+        self.assertEqual(done["usage"]["output_tokens"],115)
+        message=next(m for m in client.get(f"/api/chat/messages/{sid}").get_json() if m["id"]==done["message_id"])
+        self.assertEqual(message["usage"],done["usage"])
+
     @staticmethod
     def _local_model_stream(session_id, **_kwargs):
         args = {"text": "冒烟测试待办"}

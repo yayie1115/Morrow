@@ -141,7 +141,7 @@ class MotionContractTest(unittest.TestCase):
         self.assertIn('.study-wake-actions{position:absolute;z-index:2;right:7px;bottom:5px;', self.page)
 
     def test_ai_footer_time_follows_the_selected_reply_version(self):
-        self.assertIn('fmtTime(wrap._ats[wrap._vi]||wrap._ts)', self.page)
+        self.assertIn('fmtClock(wrap._ats[wrap._vi]||wrap._ts)', self.page)
         self.assertIn('const originalAt=wrap._ats[wrap._vi]||wrap._ts;', self.page)
         self.assertIn('wrap._models.push("已编辑");wrap._ats.push(originalAt);', self.page)
 

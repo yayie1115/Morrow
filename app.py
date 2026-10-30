@@ -2741,20 +2741,34 @@ def _receipt_error(detail, status=None):
     text = str(detail or "").lower()
     if "database is locked" in text:
         code, message = "DATABASE_BUSY", "保存时数据库繁忙，请稍后核对聊天记录。"
-    elif ("token" in text and any(word in text for word in ("exceed", "maximum", "limit"))):
+    elif any(word in text for word in (
+            "insufficient_quota", "exceeded your current quota", "billing", "balance",
+            "余额", "额度不足")):
+        code, message = "INSUFFICIENT", "账户余额或额度不足，请检查供应商账户。"
+    elif ("context_length" in text or "context length" in text
+          or ("token" in text and any(word in text for word in ("exceed", "maximum", "limit")))):
         code, message = "CONTEXT_LIMIT", "模型输入超过上限，请缩小上下文或检索范围后重试。"
+    elif "overloaded" in text or "繁忙" in text:
+        code, message = "OVERLOADED", "模型服务繁忙，请稍后重试。"
+    elif "rate limit" in text or "too many requests" in text or str(status) == "429":
+        code, message = "RATE_LIMIT", "模型服务限流，请稍后重试。"
     elif "timeout" in text or "timed out" in text:
         code, message = "TIMEOUT", "请求超时，已收到的内容请先核对保存状态。"
     elif str(status) in {"401", "403"}:
         code, message = "ACCESS_DENIED", "模型服务拒绝了认证或权限，请检查服务配置。"
-    elif str(status) == "429":
-        code, message = "RATE_LIMIT", "模型服务限流，请稍后重试。"
     elif any(word in text for word in ("disconnect", "connection", "network", "断开", "中断")):
         code, message = "INTERRUPTED", "连接中断，请核对已保存内容后再重试。"
     else:
         code, message = "REQUEST_FAILED", "本次请求未完成，请核对已收到的内容后再重试。"
     if str(status).isdigit() and 400 <= int(status) <= 599:
         message = "HTTP " + str(status) + " · " + message
+    # 供应商真正的报错原因（已由 chat_engine 提取成一句话）附在后面，
+    # 否则用户只能看到 "HTTP 429"，不知道是限流、欠费还是参数不对。
+    reason = " ".join(str(detail or "").split())
+    reason = chat_engine._mask_secrets(reason)
+    reason = reason[:300].rstrip()
+    if reason and reason.lower() not in message.lower():
+        message = message + "\n原因：" + reason
     return {"code": code, "message": message}
 
 
@@ -2844,6 +2858,21 @@ def get_messages(session_id):
             "SELECT message_id,run_id,count(*) AS n,sum(CASE WHEN source='receipt' THEN 1 ELSE 0 END) AS errors FROM tool_calls WHERE session_id=? AND message_id>=? AND message_id<=? GROUP BY message_id,run_id",
             (session_id, min(ids), max(ids))):
             receipt_groups.setdefault(receipt["message_id"], []).append((receipt["run_id"], receipt["n"], receipt["errors"]))
+    usage_by_message = {}
+    if rows:
+        # One reply can bill several rounds (tool loops); the chat chip shows the sum.
+        for usage_row in db.execute(
+            "SELECT message_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
+            "SUM(cache_read_input_tokens) AS cache_read_input_tokens, "
+            "SUM(cache_creation_input_tokens) AS cache_creation_input_tokens "
+            "FROM api_usage WHERE session_id=? AND message_id>=? AND message_id<=? "
+            "AND message_id IS NOT NULL GROUP BY message_id",
+            (session_id, min(ids), max(ids)),
+        ):
+            usage_by_message[usage_row["message_id"]] = _usage_summary(
+                usage_row["input_tokens"], usage_row["output_tokens"],
+                usage_row["cache_read_input_tokens"], usage_row["cache_creation_input_tokens"],
+            )
     out = []
     for r in rows:
         d = dict(r)
@@ -2870,6 +2899,7 @@ def get_messages(session_id):
             active_run = active_version.get("tool_run_id") if isinstance(active_version, dict) else None
         d["receipt_count"] = sum(n for run,n,e in receipt_groups.get(r["id"], []) if not active_run or run==active_run)
         d["receipt_error_count"] = sum(e for run,n,e in receipt_groups.get(r["id"], []) if not active_run or run==active_run)
+        d["usage"] = usage_by_message.get(r["id"]) if d["role"] == "assistant" else None
         out.append(d)
     return jsonify(out)
 
@@ -3059,17 +3089,16 @@ def chat_send():
     )
     db.commit()
 
-    return _sse_response(
-        _stream_reply(session_id, user_msg_id=user_msg_id, model=model,
-                      think=bool(data.get("think")), provider_id=data.get("provider_id"),
-                      context_limit=_context_limit(data.get("context_limit")),
-                      image_limit=_image_limit(data.get("image_limit")),
-                      latest_images_only=bool(data.get("latest_images_only")),
-                      cache_ttl=_cache_ttl(data.get("cache_ttl")),
-                      mcp_server_ids=_chat_visible_mcp_server_ids(),
-                      sticker_prompt=_sticker_capability_prompt(db),
-                      music_prompt=music_prompt)
-    )
+    return _live_sse_response(session_id, _stream_reply(
+        session_id, user_msg_id=user_msg_id, model=model,
+        think=bool(data.get("think")), provider_id=data.get("provider_id"),
+        context_limit=_context_limit(data.get("context_limit")),
+        image_limit=_image_limit(data.get("image_limit")),
+        latest_images_only=bool(data.get("latest_images_only")),
+        cache_ttl=_cache_ttl(data.get("cache_ttl")),
+        mcp_server_ids=_chat_visible_mcp_server_ids(),
+        sticker_prompt=_sticker_capability_prompt(db),
+        music_prompt=music_prompt))
 
 
 @app.post("/api/chat/regenerate")
@@ -3114,18 +3143,52 @@ def chat_regenerate():
         ).fetchone()
         if tail is not None and tail["role"] == "assistant":
             regen_id = tail["id"]
-    return _sse_response(
-        _stream_reply(session_id, model=data.get("model"),
-                      think=bool(data.get("think")), regen_id=regen_id,
-                      provider_id=data.get("provider_id"),
-                      context_limit=_context_limit(data.get("context_limit")),
-                      image_limit=_image_limit(data.get("image_limit")),
-                      latest_images_only=bool(data.get("latest_images_only")),
-                      cache_ttl=_cache_ttl(data.get("cache_ttl")),
-                      mcp_server_ids=_chat_visible_mcp_server_ids(),
-                      sticker_prompt=_sticker_capability_prompt(db),
-                      music_prompt=_music_context_prompt(data.get("music_context")))
-    )
+    return _live_sse_response(session_id, _stream_reply(
+        session_id, model=data.get("model"),
+        think=bool(data.get("think")), regen_id=regen_id,
+        provider_id=data.get("provider_id"),
+        context_limit=_context_limit(data.get("context_limit")),
+        image_limit=_image_limit(data.get("image_limit")),
+        latest_images_only=bool(data.get("latest_images_only")),
+        cache_ttl=_cache_ttl(data.get("cache_ttl")),
+        mcp_server_ids=_chat_visible_mcp_server_ids(),
+        sticker_prompt=_sticker_capability_prompt(db),
+        music_prompt=_music_context_prompt(data.get("music_context"))))
+
+
+@app.get("/api/chat/live/<int:session_id>")
+@require_auth
+def chat_live_status(session_id):
+    """这台设备不在前台时，这一轮是不是还在服务器上跑。"""
+    with _live_replies_lock:
+        live = _live_replies.get(session_id)
+    if live is None:
+        return jsonify({"running": False, "session_id": session_id})
+    return jsonify(_live_reply_snapshot(live))
+
+
+@app.get("/api/chat/live/<int:session_id>/stream")
+@require_auth
+def chat_live_stream(session_id):
+    """重新接上还在生成的那一轮（从头回放，前端先清空占位再渲染）。"""
+    with _live_replies_lock:
+        live = _live_replies.get(session_id)
+    if live is None:
+        return jsonify({"error": "这一轮回答已经结束了"}), 404
+    return _sse_response(_tail_live_reply(live))
+
+
+@app.post("/api/chat/live/<int:session_id>/stop")
+@require_auth
+def chat_live_stop(session_id):
+    """显式停止：只有用户自己点停止，才会取消后台这一轮。"""
+    with _live_replies_lock:
+        live = _live_replies.get(session_id)
+    if live is None or live.done:
+        return jsonify({"ok": True, "running": False})
+    live.cancelled = True
+    live.push(_sse({"type": "stopped", "detail": "这一轮已经停下"}))
+    return jsonify({"ok": True, "running": True})
 
 
 @app.put("/api/chat/message/<int:msg_id>")
@@ -3154,17 +3217,16 @@ def edit_message(msg_id):
         "DELETE FROM messages WHERE session_id = ? AND id > ?", (session_id, msg_id)
     )
     db.commit()
-    return _sse_response(
-        _stream_reply(session_id, model=data.get("model"), think=bool(data.get("think")),
-                      provider_id=data.get("provider_id"),
-                      context_limit=_context_limit(data.get("context_limit")),
-                      image_limit=_image_limit(data.get("image_limit")),
-                      latest_images_only=bool(data.get("latest_images_only")),
-                      cache_ttl=_cache_ttl(data.get("cache_ttl")),
-                      mcp_server_ids=_chat_visible_mcp_server_ids(),
-                      sticker_prompt=_sticker_capability_prompt(db),
-                      music_prompt=_music_context_prompt(data.get("music_context")))
-    )
+    return _live_sse_response(session_id, _stream_reply(
+        session_id, model=data.get("model"), think=bool(data.get("think")),
+        provider_id=data.get("provider_id"),
+        context_limit=_context_limit(data.get("context_limit")),
+        image_limit=_image_limit(data.get("image_limit")),
+        latest_images_only=bool(data.get("latest_images_only")),
+        cache_ttl=_cache_ttl(data.get("cache_ttl")),
+        mcp_server_ids=_chat_visible_mcp_server_ids(),
+        sticker_prompt=_sticker_capability_prompt(db),
+        music_prompt=_music_context_prompt(data.get("music_context"))))
 
 
 @app.post("/api/chat/message/<int:msg_id>/version")
@@ -3463,29 +3525,84 @@ def _price_num(v):
 
 
 def _usage_numbers(raw):
+    """把不同家的 usage 归一成「互不重叠」的四个数。
+
+    OpenAI/DeepSeek 风格：``prompt_tokens`` 已经包含缓存命中
+    （``prompt_tokens_details.cached_tokens`` / ``prompt_cache_hit_tokens`` 是它的子集），
+    所以要把这部分从 input 里扣掉再单独记，否则 token 会翻倍、缓存率分母也会错。
+    Anthropic 风格：``input_tokens`` 与 cache read/write 本来就是分开的三块。
+    """
     raw = raw if isinstance(raw, dict) else {}
     details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details") or {}
-    input_tokens = _num(raw.get("input_tokens") or raw.get("prompt_tokens"))
-    output_tokens = _num(raw.get("output_tokens") or raw.get("completion_tokens"))
+    openai_style = raw.get("prompt_tokens") is not None or raw.get("completion_tokens") is not None
     cache_read = _num(
         raw.get("cache_read_input_tokens")
         or raw.get("cached_input_tokens")
         or raw.get("prompt_cache_hit_tokens")
         or details.get("cached_tokens")
     )
-    cache_write = _num(
-        raw.get("cache_creation_input_tokens")
-        or raw.get("cache_write_input_tokens")
-        or raw.get("prompt_cache_miss_tokens")
-    )
-    total = _num(raw.get("total_tokens")) or (input_tokens + output_tokens + cache_read + cache_write)
+    if openai_style:
+        prompt_tokens = _num(raw.get("prompt_tokens"))
+        completion = _num(raw.get("completion_tokens"))
+        input_tokens = max(0, prompt_tokens - cache_read)
+        cache_write = 0
+        total = _num(raw.get("total_tokens")) or (prompt_tokens + completion)
+    else:
+        input_tokens = _num(raw.get("input_tokens") or raw.get("prompt_tokens"))
+        completion = _num(raw.get("output_tokens"))
+        cache_write = _num(
+            raw.get("cache_creation_input_tokens") or raw.get("cache_write_input_tokens")
+        )
+        total = _num(raw.get("total_tokens")) or (
+            input_tokens + completion + cache_read + cache_write
+        )
     return {
         "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
+        "output_tokens": completion,
         "cache_read_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_write,
         "total_tokens": total,
     }
+
+
+def _usage_summary(input_tokens=0, output_tokens=0, cache_read=0, cache_write=0):
+    """One message's token accounting plus its Anthropic-style cache hit ratio.
+
+    The ratio follows /api/usage/month so the chat chip agrees with the dashboard:
+    cache reads over the whole prompt (fresh + cache read + cache write).
+    """
+    input_tokens = int(input_tokens or 0)
+    output_tokens = int(output_tokens or 0)
+    cache_read = int(cache_read or 0)
+    cache_write = int(cache_write or 0)
+    prompt_tokens = input_tokens + cache_read + cache_write
+    return {
+        "tokens": input_tokens + output_tokens + cache_read + cache_write,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_write,
+        "cache_rate": (cache_read / prompt_tokens) if prompt_tokens else 0.0,
+    }
+
+
+def _usage_summary_items(items):
+    """Collapse every billable round of one reply into a single summary."""
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+    }
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        nums = _usage_numbers(item.get("usage") or {})
+        totals["input_tokens"] += nums["input_tokens"]
+        totals["output_tokens"] += nums["output_tokens"]
+        totals["cache_read"] += nums["cache_read_input_tokens"]
+        totals["cache_write"] += nums["cache_creation_input_tokens"]
+    return _usage_summary(**totals)
 
 
 def _model_price(provider_id, model_id, conn=None):
@@ -3568,6 +3685,157 @@ def _insert_model_usage_items(conn, session_id, result_or_error):
 
 _active_chat_requests = 0
 _active_chat_requests_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# 脱离连接的回复（手机切后台、锁屏、网络断开都不该掐断这一轮）
+#
+# 生成跑在独立线程里：它只写数据库和一块内存事件流，HTTP 响应只是这块事件流
+# 的观察者。客户端断开 → 观察者结束，生成继续；客户端回来 → 重新观察或直接
+# 从数据库读到已经收好的回复。显式点“停止”才会取消这一轮。
+# ---------------------------------------------------------------------------
+_LIVE_REPLY_TTL = 300            # 结束后保留事件流，留给晚到/重连的客户端
+_live_replies = {}               # session_id -> _LiveReply
+_live_replies_lock = threading.Lock()
+
+
+class _LiveReply:
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.events = []          # 原始 SSE 帧
+        self.payloads = []        # 与 events 对齐的解析结果
+        self.done = False
+        self.cancelled = False
+        self.error = ""
+        self.started_at = time.time()
+        self.finished_at = None
+        self.message_id = None
+        self.cond = threading.Condition()
+
+    def push(self, chunk):
+        payload = None
+        if isinstance(chunk, str) and chunk.startswith("data: "):
+            try:
+                payload = json.loads(chunk[6:].strip())
+            except (TypeError, ValueError):
+                payload = None
+        with self.cond:
+            self.events.append(chunk)
+            self.payloads.append(payload)
+            if isinstance(payload, dict) and payload.get("type") == "done":
+                self.message_id = payload.get("message_id")
+            self.cond.notify_all()
+
+    def finish(self, error=""):
+        with self.cond:
+            self.done = True
+            if error and not self.error:
+                self.error = error
+            self.finished_at = time.time()
+            self.cond.notify_all()
+
+    def text(self, kind="delta"):
+        return "".join(
+            str(payload.get("content") or "")
+            for payload in self.payloads
+            if isinstance(payload, dict) and payload.get("type") == kind
+        )
+
+
+def _forget_live_reply(live):
+    with _live_replies_lock:
+        if _live_replies.get(live.session_id) is live:
+            _live_replies.pop(live.session_id, None)
+
+
+def _start_live_reply(session_id, generator):
+    """Begin generating in a thread that outlives the request.
+
+    Returns (live, None) when this call owns the reply, or (None, existing) when
+    the session is already answering.
+    """
+    global _active_chat_requests
+    live = _LiveReply(session_id)
+    with _live_replies_lock:
+        existing = _live_replies.get(session_id)
+        if existing is not None and not existing.done and not existing.cancelled:
+            return None, existing
+        _live_replies[session_id] = live
+
+    def run():
+        global _active_chat_requests
+        with _active_chat_requests_lock:
+            _active_chat_requests += 1
+        try:
+            for chunk in generator:
+                live.push(chunk)
+                if live.cancelled:
+                    break
+        except Exception as exc:  # noqa: BLE001 — 后台线程不能把异常弄丢
+            app.logger.exception("Detached reply failed for session %s", session_id)
+            live.push(_sse({"type": "error", "detail": str(exc) or type(exc).__name__}))
+        finally:
+            try:
+                generator.close()
+            except Exception:  # noqa: BLE001
+                pass
+            with _active_chat_requests_lock:
+                _active_chat_requests = max(0, _active_chat_requests - 1)
+            live.finish()
+            timer = threading.Timer(_LIVE_REPLY_TTL, _forget_live_reply, args=(live,))
+            timer.daemon = True
+            timer.start()
+
+    threading.Thread(target=run, name=f"reply-{session_id}", daemon=True).start()
+    return live, None
+
+
+def _tail_live_reply(live):
+    """Yield the live reply's SSE frames until it finishes.
+
+    When the client disconnects this generator is closed; nothing else happens —
+    the worker thread keeps generating and saving.
+    """
+    index = 0
+    idle_since = time.time()
+    while True:
+        with live.cond:
+            if index >= len(live.events) and not live.done:
+                live.cond.wait(1.0)
+            pending = list(live.events[index:])
+            index = len(live.events)
+            done = live.done
+        for chunk in pending:
+            yield chunk
+        if pending:
+            idle_since = time.time()
+        if done and index >= len(live.events):
+            return
+        if not pending and time.time() - idle_since > 15:
+            yield ": ping\n\n"
+            idle_since = time.time()
+
+
+def _live_reply_snapshot(live):
+    return {
+        "running": not live.done,
+        "session_id": live.session_id,
+        "started_at": live.started_at,
+        "finished_at": live.finished_at,
+        "text": live.text("delta"),
+        "reasoning": live.text("reasoning"),
+        "message_id": live.message_id,
+        "cancelled": live.cancelled,
+        "error": live.error,
+    }
+
+
+def _live_sse_response(session_id, generator):
+    live, existing = _start_live_reply(session_id, generator)
+    if live is None:
+        return jsonify({"error": "这一轮回答还没有结束", "running": True}), 409
+    return _sse_response(_tail_live_reply(live))
+
 
 
 def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, regen_id=None,
@@ -4066,6 +4334,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         "type": "done", "message_id": msg_id, "model": meta["model"],
         "at": meta["at"], "think_ms": reasoning_ms, "attachments": reply_attachments,
         "artifacts": done_artifacts, "receipt_count":receipt_count,
+        "usage": _usage_summary_items(usage_log),
     }
     if push_event:
         done_payload["notification_event_id"] = push_event["id"]

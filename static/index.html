@@ -1676,15 +1676,7 @@
       background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--border) 62%,transparent));}
     .daily-time-divider::after{transform:scaleX(-1);}
     body.daily-chat.daily-avatars .ai-msg .message-ai{position:relative;margin-left:38px;max-width:calc(84% - 38px);}
-    body.daily-chat.daily-avatars .ai-msg .message-ai::before{content:"";position:absolute;left:-38px;top:0;
-      width:29px;height:29px;border-radius:50%;background-color:#c9e3ec;background-image:var(--daily-assistant-avatar,none);
-      background-position:center;background-size:cover;background-repeat:no-repeat;
-      background-clip:padding-box;clip-path:circle(50% at 50% 50%);border:1px solid color-mix(in srgb,var(--glass-border) 75%,transparent);box-shadow:0 1px 3px var(--shadow);}
-    body.daily-chat.daily-avatars .row-user .u-col{position:relative;}
-    body.daily-chat.daily-avatars .row-user .u-col::after{content:"";position:absolute;right:0;top:0;
-      width:29px;height:29px;border-radius:50%;background-color:#efd3dc;background-image:var(--daily-user-avatar,none);
-      background-position:center;background-size:cover;background-repeat:no-repeat;
-      background-clip:padding-box;clip-path:circle(50% at 50% 50%);border:1px solid color-mix(in srgb,var(--glass-border) 75%,transparent);box-shadow:0 1px 3px var(--shadow);}
+    /* avatars are real DOM nodes now (.msg-avatar) so they can carry a saved image or an initial */
     body.daily-chat.daily-avatars .bubble-user{margin-right:38px;max-width:calc(84% - 38px);}
     body.daily-chat.daily-avatars .bubble-user.user-bubble-stack{max-width:calc(84% - 38px);}
     body.daily-chat.daily-avatars .message-ai .ai-part:first-of-type{border-radius:4px 17px 17px 17px;}
@@ -3010,6 +3002,27 @@
       .moment-hit{padding:0 2px;border-radius:3px;background:color-mix(in srgb,var(--accent) 28%,transparent);color:inherit;box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 12%,transparent)}
     </style>
     <link rel="stylesheet" href="/static/sakie-theme.css?v=blue-1">
+    <style>
+      /* One avatar per message, pinned to the vertical centre of its bubble. */
+      .msg-avatar{position:absolute;top:50%;display:grid;place-items:center;width:30px;height:30px;
+        border-radius:50%;transform:translateY(-50%);background-color:#c9e3ec;
+        background-position:center;background-size:cover;background-repeat:no-repeat;background-clip:padding-box;
+        border:1px solid color-mix(in srgb,var(--glass-border) 75%,transparent);
+        box-shadow:0 1px 3px var(--shadow);color:color-mix(in srgb,var(--text-primary) 46%,transparent);
+        font:11px/1 "EB Garamond",Georgia,serif;letter-spacing:.04em;pointer-events:none;user-select:none;}
+      .msg-avatar.assistant{left:-38px;}
+      .msg-avatar.user{right:-38px;background-color:#efd3dc;}
+      .ai-msg .message-ai{position:relative;margin-left:38px;max-width:calc(84% - 38px);}
+      .ai-msg .message-ai .ai-part{position:relative;}
+      .row-user .bubble-user.user-bubble-stack .user-part{position:relative;}
+      .row-user .bubble-user{position:relative;margin-right:38px;max-width:calc(84% - 38px);}
+      .row-user .bubble-user.user-bubble-stack{max-width:calc(84% - 38px);}
+      .row-user .user-media{position:relative;margin-right:38px;}
+      body .ai-msg .reasoning{margin-left:42px;}
+      body .ai-msg .ai-actions{padding-left:42px;}
+      .user-time{margin:4px 42px 0 5px;opacity:.55;}
+      body.daily-chat .user-time{display:block!important;opacity:.55;font-size:10px;}
+    </style>
 </head>
 <body>
 
@@ -6013,7 +6026,7 @@ function refreshChatReceipt(wrap){
   else details.querySelector("summary").textContent="行动 / 回执";
 }
 function renderStoredMessage(m){
-  const wrap=m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[]);
+  const wrap=m.role==="user"?addUser(m.content,m.id,m.versions,m.active,m.attachments,m.created_at):addAI(m.content,m.created_at,m.id,m.reasoning,m.versions,m.active,m.reasoning_ms,m.attachments,m.artifacts||[],m.usage||null);
   if(m.receipt_count){const details=ensureChatReceipt(wrap,m.receipt_count);
     if(m.receipt_error_count===m.receipt_count)details.querySelector("summary").textContent="报错回执 · "+m.receipt_count;}return wrap;
 }
@@ -6133,6 +6146,11 @@ function fmtTime(ts){const t=ts?new Date(ts.replace(" ","T")):new Date(),now=new
   const hm=t.toTimeString().slice(0,5);
   const sameDay=t.getFullYear()===now.getFullYear()&&t.getMonth()===now.getMonth()&&t.getDate()===now.getDate();
   return sameDay?hm:MONTH_ABBR[t.getMonth()]+" "+t.getDate()+" · "+hm;}
+function fmtClock(ts){const t=ts?new Date(String(ts).replace(" ","T")):new Date(),now=new Date();
+  if(Number.isNaN(t.getTime()))return "";
+  const hms=t.toTimeString().slice(0,8);
+  const sameDay=t.getFullYear()===now.getFullYear()&&t.getMonth()===now.getMonth()&&t.getDate()===now.getDate();
+  return sameDay?hms:MONTH_ABBR[t.getMonth()]+" "+t.getDate()+" · "+hms;}
 const CHAT_PAUSE_MS=4*60*60*1000;
 function chatMessageDate(wrap){const raw=wrap?._ts;if(!raw)return null;const value=new Date(String(raw).replace(" ","T"));return Number.isNaN(value.getTime())?null:value;}
 function dailyDividerLabel(current,previous){
@@ -6222,6 +6240,9 @@ function setAIBody(wrap){
     renderText(source.slice(0,offset));body.appendChild(makeVoiceEnvelope(voice));renderText(source.slice(offset));}
   else renderText(visible);
   renderStickers(body,wrap._attachmentVersions?.[wrap._vi]||[],true);
+  const parts=[...body.querySelectorAll(".ai-part")];
+  if(parts.length)parts.forEach(part=>attachAvatar(part,"assistant"));
+  else attachAvatar(body,"assistant");
 }
 
 function artifactsForVersion(version,artifacts){const all=artifacts||[],ids=Array.isArray(version?.artifact_ids)?version.artifact_ids.map(String):[];
@@ -6365,6 +6386,27 @@ $("#photoLightboxClose").onclick=closePhotoViewer;
 $("#photoLightbox").onclick=e=>{if(e.target===$("#photoLightbox"))closePhotoViewer();};
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#photoLightbox").hidden)closePhotoViewer();});
 
+function messageAvatar(kind){
+  const node=document.createElement("span");node.className="msg-avatar "+kind;node.setAttribute("aria-hidden","true");
+  const saved=(kind==="user"?localStorage.getItem("dailyUserAvatar"):localStorage.getItem("dailyAssistantAvatar"))||"";
+  if(saved){node.style.backgroundImage='url("'+String(saved).replace(/"/g,"%22")+'")';}
+  else node.textContent=kind==="user"?"我":(assistantPronoun()||"他").slice(0,1);
+  return node;
+}
+function attachAvatar(host,kind){
+  if(!host)return;
+  host.querySelectorAll(":scope > .msg-avatar").forEach(node=>node.remove());
+  host.appendChild(messageAvatar(kind));
+}
+function aiMetaText(wrap){
+  const usage=wrap._usage&&wrap._usage[wrap._vi],bits=[];
+  const tokens=usage?Number(usage.tokens):0;
+  if(Number.isFinite(tokens)&&tokens>0)bits.push(fmtTok(tokens)+" token");
+  if(usage&&Number.isFinite(Number(usage.cache_rate)))bits.push(Math.round(Number(usage.cache_rate)*100)+"%");
+  bits.push(fmtClock(wrap._ats[wrap._vi]||wrap._ts));
+  if(wrap._models&&wrap._models[wrap._vi]==="已编辑")bits.push("已编辑");
+  return bits.filter(Boolean).join(" · ");
+}
 function renderUserBody(wrap){
   const b=wrap.querySelector(".bubble-user");
   const text=wrap._text||"",parts=document.body.classList.contains("daily-chat")?splitReplyBlocks(text):[];
@@ -6372,8 +6414,8 @@ function renderUserBody(wrap){
   if(parts.length>1){
     b.innerHTML="";parts.forEach(part=>{const bubble=document.createElement("div");bubble.className="user-part";const copy=document.createElement("div");copy.className="u-text";copy.textContent=part;bubble.appendChild(copy);b.appendChild(bubble);});
   }else{b.innerHTML='<div class="u-text"></div>';b.querySelector(".u-text").textContent=text;}
-  const time=wrap.querySelector(".user-time"),showTime=(wrap._text||"").trim()&&!(wrap._attachments||[]).length;
-  time.textContent=fmtTime(wrap._ts);time.hidden=!showTime;
+  const time=wrap.querySelector(".user-time");
+  time.textContent=fmtClock(wrap._ts);time.hidden=false;
   b.hidden=!text.trim();
   const media=wrap.querySelector(".user-media");media.innerHTML="";
   const imageItems=(wrap._attachments||[]).filter(a=>a.type==="image"&&a.url);
@@ -6416,6 +6458,11 @@ function renderUserBody(wrap){
   });
   if(files.children.length)media.appendChild(files);
   renderStickers(media,wrap._attachments||[]);
+  // Bubble-less rows (image only) hang the avatar on the media block instead;
+  // a long message that renders as several stacked bubbles gets one per bubble.
+  const stackParts=[...b.querySelectorAll(":scope > .user-part")];
+  if(stackParts.length)stackParts.forEach(part=>attachAvatar(part,"user"));
+  else attachAvatar(text.trim()?b:media,"user");
 }
 window.addEventListener("resize",()=>document.querySelectorAll(".photo-deck").forEach(deck=>{
   if(deck._wrap)applyDeckLayout(deck._wrap,deck);
@@ -6506,7 +6553,7 @@ function renderStickers(container,items,ai=false){
     container.appendChild(img);
   });
 }
-function addAI(text,ts,id,reasoning,versions,active,reasoningMs,attachments=[],artifacts=[]){
+function addAI(text,ts,id,reasoning,versions,active,reasoningMs,attachments=[],artifacts=[],usage=null){
   const wrap=document.createElement("div");wrap.className="msg ai-msg";
   if(versions&&versions.length){ // restored from DB: all switchable versions
     wrap._versions=versions.map(v=>v.c||"");wrap._reasonings=versions.map(v=>v.r||"");
@@ -6515,9 +6562,11 @@ function addAI(text,ts,id,reasoning,versions,active,reasoningMs,attachments=[],a
     wrap._attachmentVersions=versions.map(v=>Array.isArray(v.a)?v.a:attachments);
     wrap._artifactVersions=versions.map(v=>artifactsForVersion(v,artifacts));
     wrap._vi=Math.min(Math.max(active||0,0),versions.length-1);
+    wrap._usage=versions.map(()=>usage||null);
   }else{
     wrap._versions=[text||""];wrap._reasonings=[reasoning||""];wrap._models=[""];wrap._ats=[""];
     wrap._thinkTimes=[reasoningMs??null];wrap._attachmentVersions=[attachments||[]];wrap._artifactVersions=[artifacts||[]];wrap._vi=0;
+    wrap._usage=[usage||null];
   }
   wrap._id=id;wrap._ts=ts;
   applyFavState(wrap);
@@ -6570,7 +6619,7 @@ function renderAIActions(wrap,isLast){
   if(isLast)bar.appendChild(mk("重新生成",'<path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',()=>regenerate(wrap)));
   bar.appendChild(mk("更多",'<circle cx="12" cy="5" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.7" fill="currentColor" stroke="none"/>',()=>openAISheet(wrap)));
   const time=document.createElement("span");time.className="ai-time";
-  time.textContent=fmtTime(wrap._ats[wrap._vi]||wrap._ts);bar.appendChild(time);
+  time.textContent=aiMetaText(wrap);bar.appendChild(time);
   if(wrap._versions.length>1){
     const sw=document.createElement("span");sw.className="vswitch";
     sw.innerHTML='<button aria-label="上一条">‹</button><span>'+(wrap._vi+1)+'/'+wrap._versions.length+'</span><button aria-label="下一条">›</button>';
@@ -6640,7 +6689,7 @@ $("#expandBtn").addEventListener("mousedown",e=>e.preventDefault());
 // send-btn doubles as stop while streaming (circle → square)
 const ICON_SEND='<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>';
 const ICON_STOP='<rect x="7" y="7" width="10" height="10" rx="2.5"/>';
-let streaming=false,sending=false,preparingSend=false,abortCtl=null;
+let streaming=false,sending=false,preparingSend=false,abortCtl=null,hiddenDuringStream=false,backgroundWatchTimer=0;
 function setSendPreparing(on){preparingSend=on;const b=$("#sendBtn");
   b.classList.toggle("preparing",on);b.disabled=on;
   if(on)b.setAttribute("aria-label","正在收好附件");
@@ -6649,7 +6698,7 @@ function setStreaming(on){streaming=on;const b=$("#sendBtn");
   b.classList.toggle("stop",on);b.querySelector(".send-main-icon").innerHTML=on?ICON_STOP:ICON_SEND;
   b.setAttribute("aria-label",on?"停止":(preparingSend?"正在收好附件":"发送"));b.disabled=preparingSend&&!on;b.classList.toggle("ready",on);
   if(!on&&!preparingSend)updateSendAvailability();if(!on)setTimeout(()=>pollMusicCommands(true),180);}
-$("#sendBtn").onclick=()=>{if(streaming)abortCtl?.abort();else send();};
+$("#sendBtn").onclick=()=>{if(streaming)void stopLiveReply();else send();};
 
 let editingMsg=null;  // 用户或 AI 消息都行：发送 = 给这条加一个版本，不发新消息
 const isAImsg=w=>w.classList.contains("ai-msg");
@@ -6694,6 +6743,8 @@ async function submitEdit(text){
     const originalAt=wrap._ats[wrap._vi]||wrap._ts;const editedText=saved.content??text;
     wrap._versions.push(editedText);wrap._reasonings.push(wrap._reasonings[sourceIndex]||"");
     wrap._models.push("已编辑");wrap._ats.push(originalAt);
+    // 编辑不发新请求，所以沿用这一轮真实的用量（钱是那次花的），别再挂空。
+    if(wrap._usage)wrap._usage.push(wrap._usage[sourceIndex]??null);
     wrap._thinkTimes.push(wrap._thinkTimes[sourceIndex]??null);
     wrap._attachmentVersions.push(finalAttachments);
     wrap._artifactVersions.push(artifactsForVersion({tool_run_id:saved.tool_run_id||"",artifact_ids:saved.artifact_ids||[],artifact_offsets:saved.artifact_offsets||{}},sourceArtifacts));
@@ -6849,6 +6900,7 @@ async function streamInto(url,body,opts={}){
       // once the reply is fully done (so the chain is never visually cut short)
       else if(o.type==="done"){receivedDone=true;failed=false;aiEl._deliveryUnconfirmed=false;aiEl._id=o.message_id;dropTool();finishReasoning();
         aiEl._models[aiEl._vi]=o.model||"";aiEl._ats[aiEl._vi]=o.at||"";
+        if(o.usage)aiEl._usage[aiEl._vi]=o.usage;
         aiEl._thinkTimes[aiEl._vi]=o.think_ms??aiEl._thinkMs;
         aiEl._attachmentVersions[aiEl._vi]=o.attachments||[];
         aiEl._artifactVersions[aiEl._vi]=o.artifacts||[];
@@ -6865,15 +6917,82 @@ async function streamInto(url,body,opts={}){
         if(titlePending&&!o.partial)void generateConversationTitle(sessionId);
         if(gotReason&&(aiEl._reasonings[aiEl._vi]||"").trim()&&!rb.classList.contains("collapsed"))toggleReasoning(rb);}
     });
-    if(!receivedDone&&!failed)failReply("连接已结束，但没有收到保存确认；已收到的文字会保留，请刷新核对后再重试。");
+    if(!receivedDone&&!failed&&!hiddenDuringStream)failReply("连接已结束，但没有收到保存确认；已收到的文字会保留，请刷新核对后再重试。");
   }catch(e){
     if(receivedDone){failed=false;toast("回复已保存，页面状态更新未完成，请刷新核对。");}
-    else if(e.name==="AbortError"){toast("已停止");failReply("已停止接收，尚未收到保存确认；已收到的文字会保留。");}
+    else if(e.name==="AbortError"){toast("已停下");failReply("已停下这一轮；服务器不会再继续生成。");}
+    else if(hiddenDuringStream||document.hidden){
+      // 断在后台：服务器那一轮还在继续。不要把它标成失败，回前台再同步。
+      aiEl._deliveryUnconfirmed=true;
+      if(!document.hidden)toast("网络断开，这一轮还在服务器上继续");
+    }
+    else if(await replyStillRunning()){
+      // 页面没进后台但连接断了：服务器还在跑，接着等它，不报失败。
+      aiEl._deliveryUnconfirmed=true;
+      toast("连接断了，这一轮还在服务器上继续");
+      watchBackgroundReply();
+    }
     else failReply(e.message||String(e));
   }finally{
     if(pill.parentNode)pill.remove();dropTool();chatLiveStatus.replaceChildren();syncComposerSpace();rollbackFailedAI();setStreaming(false);refreshAllActions();
   }
 }
+/* ---------- 后台生成：回来时把进度接上/把结果刷出来 ---------- */
+async function stopLiveReply(){
+  const target=sessionId;
+  abortCtl?.abort();
+  if(target){try{await api("/api/chat/live/"+target+"/stop",{method:"POST",body:"{}"});}catch{}}
+}
+async function replyStillRunning(){
+  if(!sessionId)return false;
+  try{const r=await api("/api/chat/live/"+sessionId);return !!(r.ok&&(await r.json()).running);}catch{return false;}
+}
+function stopBackgroundWatch(){if(backgroundWatchTimer){clearInterval(backgroundWatchTimer);backgroundWatchTimer=0;}}
+function renderBackgroundReply(data){
+  if(streaming)return;   // 前台这条流还活着，不要重复画
+  let wrap=$("#log").querySelector(".ai-msg.background-reply");
+  if(!wrap){
+    wrap=addAI("",new Date().toISOString(),null,data&&data.reasoning||"");
+    wrap.classList.add("background-reply");
+  }
+  wrap._versions[wrap._vi]=data&&data.text||"";
+  wrap._reasonings[wrap._vi]=data&&data.reasoning||"";
+  setAIBody(wrap);renderReasoning(wrap);renderAIActions(wrap,true);scrollDown();
+}
+function watchBackgroundReply(){
+  stopBackgroundWatch();
+  backgroundWatchTimer=setInterval(async()=>{
+    if(!sessionId||document.hidden){return;}
+    let data=null;
+    try{const r=await api("/api/chat/live/"+sessionId);data=r.ok?await r.json():null;}catch{}
+    if(data&&data.running){renderBackgroundReply(data);return;}
+    stopBackgroundWatch();
+    await loadMessages();refreshAllActions();
+    toast("后台那一轮已经收好了");
+  },2000);
+}
+async function resumeAfterBackground(){
+  if(!sessionId)return;
+  if(!$("#view-chat")?.classList.contains("active"))return;
+  stopBackgroundWatch();
+  let data=null;
+  try{const r=await api("/api/chat/live/"+sessionId);data=r.ok?await r.json():null;}catch{}
+  if(data&&data.running){
+    renderBackgroundReply(data);
+    watchBackgroundReply();
+    return;
+  }
+  if(streaming)abortCtl?.abort();
+  await loadMessages();
+  refreshAllActions();
+}
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){hiddenDuringStream=hiddenDuringStream||streaming;return;}
+  hiddenDuringStream=false;
+  void resumeAfterBackground();
+});
+window.addEventListener("online",()=>{if(!document.hidden)void resumeAfterBackground();});
+
 async function generateConversationTitle(targetSessionId){
   try{
     const r=await api("/api/chat/sessions/"+targetSessionId+"/generate-title",{method:"POST"});

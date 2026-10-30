@@ -9,6 +9,7 @@ import codecs
 import copy
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -40,6 +41,13 @@ LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"
 
 # 没有手动覆盖时发送的近期消息数；摘要检查点会先裁掉已经压缩的旧消息。
 HISTORY_LIMIT = 30
+
+# 历史工具回执：仍然以 protocol 的 tool 消息回放（不冒充她说的话），
+# 但单条结果压短，避免整段工具返回撑满上下文。
+TOOL_REPLAY_RESULT_CHARS = int(os.environ.get("TOOL_REPLAY_RESULT_CHARS", "300"))
+TOOL_REPLAY_ERROR_CHARS = int(os.environ.get("TOOL_REPLAY_ERROR_CHARS", "300"))
+TOOL_REPLAY_ARGS_CHARS = int(os.environ.get("TOOL_REPLAY_ARGS_CHARS", "400"))
+TOOL_REPLAY_BUDGET_CHARS = int(os.environ.get("TOOL_REPLAY_BUDGET_CHARS", "8000"))
 
 # Anthropic Messages API needs max_tokens (it's required) and a version header.
 ANTHROPIC_VERSION = os.environ.get("ANTHROPIC_VERSION", "2023-06-01")
@@ -536,6 +544,79 @@ def get_provider(provider_id):
     }
 
 
+# 发送前把大图缩到模型真正能看清、接口也收得下的尺寸。原图（12MP 手机照片）
+# 接口本来就会自己缩，先传十几 MB 只是白花带宽和请求配额。
+IMAGE_PREVIEW_EDGE = int(os.environ.get("IMAGE_MAX_EDGE", "2048"))
+IMAGE_SCREENSHOT_EDGE = int(os.environ.get("IMAGE_SCREENSHOT_MAX_EDGE", "2560"))
+IMAGE_JPEG_QUALITY = int(os.environ.get("IMAGE_JPEG_QUALITY", "85"))
+IMAGE_PREVIEW_MIN_BYTES = int(os.environ.get("IMAGE_PREVIEW_MIN_BYTES", "1200000"))
+IMAGE_PREVIEW_DIR = os.path.join(DATA_DIR, ".image_preview")
+
+
+def _image_preview(name, blob, mime):
+    """缩放并缓存派生图，返回 (blob, mime)。
+
+    Pillow 缺失、解码失败或结果反而更大时原样返回，调用方按原图处理。
+    """
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 — Pillow 是可选依赖
+        return blob, mime
+    if mime not in {"image/jpeg", "image/png", "image/webp"}:
+        return blob, mime
+    try:
+        with Image.open(io.BytesIO(blob)) as probe:
+            width, height = probe.size
+    except Exception:  # noqa: BLE001
+        return blob, mime
+    # PNG 多是截图/文档/带字图片，留更高分辨率和无损编码。
+    screenshot = mime == "image/png"
+    edge = IMAGE_SCREENSHOT_EDGE if screenshot else IMAGE_PREVIEW_EDGE
+    if max(width, height) <= edge and len(blob) <= IMAGE_PREVIEW_MIN_BYTES:
+        return blob, mime
+    suffix = "png" if screenshot else "jpg"
+    try:
+        mtime = os.path.getmtime(os.path.join(UPLOAD_DIR, name))
+    except OSError:
+        mtime = 0
+    seed = f"{name}|{int(mtime)}|{edge}|{IMAGE_JPEG_QUALITY}|{suffix}"
+    cache_path = os.path.join(
+        IMAGE_PREVIEW_DIR, hashlib.sha1(seed.encode("utf-8")).hexdigest() + "." + suffix
+    )
+    try:
+        if os.path.isfile(cache_path):
+            with open(cache_path, "rb") as handle:
+                return handle.read(), ("image/png" if suffix == "png" else "image/jpeg")
+    except OSError:
+        pass
+    try:
+        with Image.open(io.BytesIO(blob)) as image:
+            keep_alpha = suffix == "png" and image.mode in ("RGBA", "LA", "P")
+            frame = image.convert("RGBA" if keep_alpha else "RGB")
+            frame.thumbnail((edge, edge), Image.LANCZOS)
+            buffer = io.BytesIO()
+            if suffix == "png":
+                frame.save(buffer, format="PNG", optimize=True)
+                if buffer.tell() > 1500000:
+                    buffer = io.BytesIO()
+                    frame.convert("RGB").save(buffer, format="JPEG", quality=90, optimize=True)
+                    suffix = "jpg"
+            else:
+                frame.save(buffer, format="JPEG", quality=IMAGE_JPEG_QUALITY, optimize=True)
+        data = buffer.getvalue()
+    except Exception:  # noqa: BLE001
+        return blob, mime
+    if len(data) >= len(blob):
+        return blob, mime
+    try:
+        os.makedirs(IMAGE_PREVIEW_DIR, exist_ok=True)
+        with open(cache_path, "wb") as handle:
+            handle.write(data)
+    except OSError:
+        pass
+    return data, ("image/png" if suffix == "png" else "image/jpeg")
+
+
 def _attachment_parts(attachments, target="openai", image_variant="original"):
     parts = []
     for a in attachments or []:
@@ -560,6 +641,7 @@ def _attachment_parts(attachments, target="openai", image_variant="original"):
         # Re-sniff on every send so old attachments saved with a misleading
         # filename/MIME (for example PNG bytes called .jpg) remain usable.
         mime = detect_image_mime(blob) or selected.get("mime") or a.get("mime") or "image/jpeg"
+        blob, mime = _image_preview(path, blob, mime)
         data = base64.b64encode(blob).decode("ascii")
         if target == "anthropic":
             parts.append({
@@ -710,6 +792,79 @@ def _history_time_prefix(created_at):
     return f"[{month}-{day} {hour}:{minute}] "
 
 
+def _replay_text(value, limit):
+    text = " ".join(str(value if value is not None else "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _replay_args_json(item):
+    """工具入参保持合法 JSON，过长时退化成一段可读的摘要。"""
+    args = item.get("args")
+    if not isinstance(args, dict) or not args:
+        return "{}"
+    try:
+        text = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return "{}"
+    if len(text) <= TOOL_REPLAY_ARGS_CHARS:
+        return text
+    return json.dumps({"_brief": _replay_text(text, TOOL_REPLAY_ARGS_CHARS // 2)},
+                      ensure_ascii=False)
+
+
+def _replay_tool_content(item):
+    """一条历史工具结果：失败明确标成失败，成功结果压到上限。"""
+    if str(item.get("status") or "").lower() == "error":
+        reason = item.get("error") or item.get("result") or "未知错误"
+        return "失败：" + _replay_text(reason, TOOL_REPLAY_ERROR_CHARS)
+    result = str(item.get("result") or "").strip()
+    if not result:
+        return "（无输出）"
+    condensed = _replay_text(result, TOOL_REPLAY_RESULT_CHARS)
+    if len(condensed) < len(result):
+        condensed += f"…（已截断 {len(result) - TOOL_REPLAY_RESULT_CHARS} 字）"
+    return condensed
+
+
+def _replay_tool_payloads(rows, budget=TOOL_REPLAY_BUDGET_CHARS):
+    """assistant message id -> [(name, args_json, tool_content), ...]。
+
+    预算从最新一轮往前分配，用尽后更早的轮次只留一句「已省略」，保证总量有上限。
+    """
+    rounds = []
+    for row in rows:
+        if row["role"] != "assistant" or not row["tool_log"]:
+            continue
+        try:
+            log = json.loads(row["tool_log"])
+        except (TypeError, ValueError):
+            continue
+        items = [item for item in log if isinstance(item, dict)] if isinstance(log, list) else []
+        if items:
+            rounds.append((row["id"], items))
+    if not rounds:
+        return {}
+    payloads, remaining = {}, budget
+    for row_id, items in reversed(rounds):
+        kept = []
+        for item in items:
+            content = _replay_tool_content(item)
+            if remaining <= 0:
+                # 预算用尽：协议仍要求每条调用有结果，但只占一个字符。
+                content = "."
+            elif len(content) > remaining:
+                content = _replay_text(content, remaining)
+                remaining = 0
+            else:
+                remaining -= len(content)
+            kept.append((str(item.get("name") or "tool"), _replay_args_json(item), content))
+        payloads[row_id] = kept
+    return payloads
+    return blocks
+
+
 def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images=True,
                 image_limit=None, latest_images_only=False, image_variant="original",
                 current_user_message_id=None):
@@ -847,6 +1002,7 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
                     "legacy_replace": not has_offset and (row["content"] or "").strip() == (chosen["visible_text"] or "").strip(),
                 }
     conn.close()
+    tool_blocks = _replay_tool_payloads(rows)
 
     def with_artifact_recap(row):
         content = row["content"] or ""
@@ -893,20 +1049,25 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
             except (TypeError, ValueError):
                 tlog = None
         if tlog:
-            calls, results = [], []
-            for i, t in enumerate(tlog):
-                cid = f"call_{r['id']}_{i}"
-                calls.append({
-                    "id": cid, "type": "function",
-                    "function": {"name": t.get("name", ""),
-                                 "arguments": json.dumps(t.get("args") or {}, ensure_ascii=False)},
-                })
-                results.append({"role": "tool", "tool_call_id": cid,
-                                "content": t.get("result", "")})
-            # 调工具的那条 assistant 消息：content 留空、带 tool_calls
-            out.append({"role": "assistant", "content": "", "tool_calls": calls})
-            out.extend(results)
-            # 工具之后她真正说的话（落库的 content）
+            # 工具回执仍然走协议里的 tool 消息（不是她说过的话），只是内容压短了。
+            payloads = tool_blocks.get(r["id"]) or []
+            if payloads:
+                calls, results = [], []
+                for index, (name, args_json, content) in enumerate(payloads):
+                    call_id = f"call_{r['id']}_{index}"
+                    calls.append({
+                        "id": call_id, "type": "function",
+                        "function": {"name": name, "arguments": args_json},
+                    })
+                    results.append({"role": "tool", "tool_call_id": call_id, "content": content})
+                out.append({"role": "assistant", "content": "", "tool_calls": calls})
+                out.extend(results)
+                spoken_text = with_artifact_recap(r)
+                final_text = time_prefix + "\n\n".join(
+                    part for part in (spoken_text, "\n".join(sticker_lines)) if part
+                )
+                out.append({"role": "assistant", "content": final_text})
+                continue
             spoken_text = with_artifact_recap(r)
             final_text = time_prefix + "\n\n".join(
                 part for part in (spoken_text, "\n".join(sticker_lines)) if part
@@ -982,22 +1143,53 @@ def get_conversation_summary(session_id):
 
 
 class _ThinkSplitter:
-    """Route inline <think>/<thinking> blocks in the content stream to the
-    reasoning channel so they never leak as raw text in the reply.
+    """Route inline thinking in the content stream to the reasoning channel.
 
-    Some models (and the relay's deepseek-v4-pro) wrap their chain-of-thought in
-    <thinking>…</thinking> inside `content` rather than the separate
-    `reasoning_content` field. Feed content chunks here; it yields
-    ("reasoning"|"delta", text) and holds back any partial tag at a chunk
-    boundary until the rest arrives.
+    Two shapes are handled:
+    - ``<thinking>…</thinking>`` (and ``<think>``) tags, possibly split across chunks;
+    - a relay that prefixes the whole monologue with a marker such as ``🧠`` or
+      ``思考过程：`` instead of using the ``reasoning_content`` field. In that case
+      the marker itself and everything up to the first blank line is treated as
+      thinking, so the visible reply starts at the first real paragraph.
+
+    Feed content chunks here; it yields ("reasoning"|"delta", text) and holds back
+    a partial tag / trailing newline at a chunk boundary until the rest arrives.
     """
 
     OPENS = ("<thinking>", "<think>")
     CLOSES = ("</thinking>", "</think>")
+    MARKERS = (
+        "🧠", "思考过程：", "思考过程:", "思考：", "思考:", "行星思维",
+        "Thinking Process:", "Thinking process:", "Thinking:",
+    )
 
-    def __init__(self):
+    def __init__(self, detect_markers=False):
         self.buf = ""
         self.in_think = False
+        self.detect_markers = detect_markers
+        self.decided = not detect_markers
+        self.marker_think = False
+
+    def _decide_marker(self):
+        """Only the very start of a reply can carry a thinking marker."""
+        self.decided = True
+        text = self.buf.lstrip()
+        for marker in self.MARKERS:
+            if text.startswith(marker):
+                rest = text[len(marker):].lstrip(" \t💭🧠\r")
+                if rest.startswith("\n\n"):
+                    # 标记单独成行：没有实际思考内容，别把后面的正文整段吞掉
+                    self.buf = rest[2:]
+                    self.in_think = False
+                    self.marker_think = False
+                    return
+                if rest.startswith("\n"):
+                    rest = rest[1:]
+                self.buf = rest
+                self.in_think = True
+                self.marker_think = True
+                return
+        self.buf = text
 
     @staticmethod
     def _first(s, tags):
@@ -1020,8 +1212,29 @@ class _ThinkSplitter:
 
     def feed(self, text):
         self.buf += text
+        if not self.decided:
+            # 等够字数或等到换行，才能判断开头是不是思考标记
+            if len(self.buf) < 24 and "\n" not in self.buf:
+                return []
+            self._decide_marker()
         out = []
         while True:
+            if self.marker_think and self.in_think:
+                # 标记进入的独白：第一个空行就是正文开始的地方
+                idx = self.buf.find("\n\n")
+                if idx == -1:
+                    hold = 1 if self.buf.endswith("\n") else 0
+                    safe = len(self.buf) - hold
+                    if safe > 0:
+                        out.append(("reasoning", self.buf[:safe]))
+                        self.buf = self.buf[safe:]
+                    break
+                if idx > 0:
+                    out.append(("reasoning", self.buf[:idx]))
+                self.buf = self.buf[idx + 2:]
+                self.in_think = False
+                self.marker_think = False
+                continue
             tags = self.CLOSES if self.in_think else self.OPENS
             kind = "reasoning" if self.in_think else "delta"
             idx, tag = self._first(self.buf, tags)
@@ -1038,12 +1251,38 @@ class _ThinkSplitter:
         return out
 
     def flush(self):
+        if not self.decided:
+            self._decide_marker()
         if not self.buf:
             return []
         kind = "reasoning" if self.in_think else "delta"
         out = [(kind, self.buf)]
         self.buf = ""
         return out
+
+
+REASONING_FIELDS = ("reasoning_content", "reasoning", "thinking", "thought", "analysis")
+
+
+def _reasoning_text(delta):
+    """取这一块里的思考内容：字段名不同家不一样，取第一个非空的。"""
+    for key in REASONING_FIELDS:
+        value = delta.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    details = delta.get("reasoning_details")
+    if isinstance(details, list):
+        parts = []
+        for item in details:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("summary") or ""
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+            elif isinstance(item, str) and item.strip():
+                parts.append(item)
+        if parts:
+            return "".join(parts)
+    return ""
 
 
 def _sse_lines(resp):
@@ -1589,6 +1828,53 @@ def _strip_images_from_messages(messages):
     return out
 
 
+def _mask_secrets(text):
+    """错误详情里绝不能回显密钥：Bearer token、key=… 之类一律打码。"""
+    cleaned = str(text or "")
+    for pattern, replacement in (
+        (r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}", r"\1***"),
+        (r"(?i)((?:api[_-]?key|access[_-]?token|secret|password)\s*[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9._\-]{6,}", r"\1***"),
+        (r"(?i)\b(?:sk|ak|pk)[-_][A-Za-z0-9_\-]{8,}\b", "***"),
+    ):
+        cleaned = re.sub(pattern, replacement, cleaned)
+    return cleaned
+
+
+def _http_error_reason(response, limit=600):
+    """把供应商返回的错误体压成一句人能看懂的原因，而不是整段 JSON/HTML。"""
+    status = getattr(response, "status_code", None)
+    try:
+        raw = str(response.text or "")
+    except Exception:  # noqa: BLE001
+        raw = ""
+    reason = ""
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        candidates = []
+        error = payload.get("error")
+        if isinstance(error, dict):
+            candidates.extend([error.get("message"), error.get("type"), error.get("code")])
+        elif isinstance(error, str):
+            candidates.append(error)
+        candidates.extend([
+            payload.get("message"), payload.get("detail"), payload.get("msg"),
+            payload.get("error_description"),
+        ])
+        reason = next((str(item).strip() for item in candidates if item), "")
+    if not reason:
+        reason = re.sub(r"<[^>]+>", " ", raw)
+    reason = " ".join(reason.split())
+    reason = _mask_secrets(reason)
+    if len(reason) > limit:
+        reason = reason[: limit - 1].rstrip() + "…"
+    if not reason:
+        reason = f"HTTP {status}" if status else "请求失败"
+    return reason
+
+
 def _looks_like_image_type_error(status_code, detail):
     if status_code != 400:
         return False
@@ -1683,13 +1969,36 @@ def _bounded_tool_context(messages):
     return bounded
 
 
+def _compat_prompt_messages(messages, system=None):
+    """Request-only projection; preserve prompt text and conversation order."""
+    history = copy.deepcopy(messages)
+    if system is None:
+        parts = [m.get("content", "") for m in history if m.get("role") == "system"]
+        history = [m for m in history if m.get("role") != "system"]
+        if not parts:
+            return history
+        system = "\n\n".join(parts) if all(isinstance(p, str) for p in parts) else [
+            block for part in parts for block in (part if isinstance(part, list) else [{"type":"text","text":part}])]
+    return [{"role":"user", "content":copy.deepcopy(system)},
+            {"role":"assistant", "content":"明白，我将完全按照上述设定与记忆继续互动。"}] + history
+
+
+def _gemini_safety_settings():
+    return [{"category":category,"threshold":"BLOCK_NONE"} for category in (
+        "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
+        "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "HARM_CATEGORY_CIVIC_INTEGRITY")]
+
+
 def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta,
                         tool_definitions=None):
     """One streaming round. Yields ("reasoning"|"delta", text) for streamed
     content; returns (content_text, tool_calls) where tool_calls is a list of
     {id, name, arguments(JSON str)} accumulated from the stream (empty if none)."""
-    payload = {"model": model, "messages": _bounded_tool_context(messages), "stream": True,
+    payload = {"model": model, "messages": _compat_prompt_messages(_bounded_tool_context(messages)), "stream": True,
                "stream_options": {"include_usage": True}}
+    if "gemini" in model.lower():
+        payload["safetySettings"] = _gemini_safety_settings()
     resolved_tools = tool_definitions if tool_definitions is not None else tools.openai_tools()
     if resolved_tools:
         payload["tools"] = resolved_tools
@@ -1723,16 +2032,17 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
         return "", [], None
 
     if resp.status_code != 200:
-        detail = resp.text[:300]
+        raw_detail = resp.text[:2000]
+        detail = _http_error_reason(resp)
         _log_http_request(
             provider_meta, model, endpoint, False, status_code=resp.status_code,
             elapsed_ms=int((time.monotonic() - started) * 1000),
-            error=detail, req_bytes=req_bytes, msg_count=len(messages),
+            error=raw_detail[:1000], req_bytes=req_bytes, msg_count=len(messages),
         )
-        if _looks_like_image_type_error(resp.status_code, detail):
+        if _looks_like_image_type_error(resp.status_code, raw_detail):
             yield ("retry_text_only", detail)
             return "", [], None
-        if "stream_options" in detail:
+        if "stream_options" in raw_detail:
             payload.pop("stream_options", None)
             req_bytes = _payload_size(payload)
             started = time.monotonic()
@@ -1752,11 +2062,12 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
                 yield ("error", {"status": None, "message": str(e)})
                 return "", [], None
             if resp.status_code != 200:
-                detail = resp.text[:300]
+                raw_detail = resp.text[:2000]
+                detail = _http_error_reason(resp)
                 _log_http_request(
                     provider_meta, model, endpoint, False, status_code=resp.status_code,
                     elapsed_ms=int((time.monotonic() - started) * 1000),
-                    error=detail, req_bytes=req_bytes, msg_count=len(messages),
+                    error=raw_detail[:1000], req_bytes=req_bytes, msg_count=len(messages),
                 )
                 yield ("error", {"status": resp.status_code, "message": detail})
                 return "", [], None
@@ -1768,7 +2079,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
     # to the right channel: content starts as reply, reasoning_content starts as
     # thinking. If the relay leaks a </thinking> into reasoning_content and then
     # keeps writing the *answer* there, rsplitter flips the rest back to "delta".
-    csplitter = _ThinkSplitter()
+    csplitter = _ThinkSplitter(detect_markers=True)
     rsplitter = _ThinkSplitter()
     rsplitter.in_think = True
     content_parts = []
@@ -1811,7 +2122,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
             if choice.get("finish_reason") is not None:
                 saw_terminal = True
             # Reasoning models (e.g. deepseek-reasoner) stream thinking separately.
-            reasoning = delta.get("reasoning_content")
+            reasoning = _reasoning_text(delta)
             if reasoning:
                 saw_output = saw_output or bool(reasoning.strip())
                 for kt in rsplitter.feed(reasoning):
@@ -1842,6 +2153,11 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
             error_type=type(e).__name__, error=str(e),
             req_bytes=req_bytes, msg_count=len(messages),
         )
+        # 断线前缓冲里可能还有没吐出来的半句（标记判断会暂存几个字符），别丢。
+        for kind, text in rsplitter.flush() + csplitter.flush():
+            if kind == "delta":
+                content_parts.append(text)
+            yield (kind, text)
         yield ("error", {"status": resp.status_code, "message": str(e)})
         return "", [], usage
     for kind, text in rsplitter.flush():
@@ -2103,10 +2419,12 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
         )
     payload = {
         "model": model,
-        "system": _anthropic_system_payload(system_sections, cache_ttl, cache_mode),
-        "messages": _bounded_tool_context(payload_messages),
+        "system": "Follow the instructions below.",
+        "messages": _compat_prompt_messages(_bounded_tool_context(payload_messages), system=_anthropic_system_payload(system_sections, cache_ttl, cache_mode)),
         "stream": True,
     }
+    if "gemini" in model.lower():
+        payload["safetySettings"] = _gemini_safety_settings()
     if payload_tools:
         payload["tools"] = payload_tools
     if cache_on and cache_mode == "anthropic_auto":
@@ -2148,11 +2466,12 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
         return [], [], None
 
     if resp.status_code != 200:
-        detail = resp.text[:300]
+        raw_detail = resp.text[:2000]
+        detail = _http_error_reason(resp)
         _log_http_request(
             provider_meta, model, endpoint, False, status_code=resp.status_code,
             elapsed_ms=int((time.monotonic() - started) * 1000),
-            error=detail, req_bytes=req_bytes, msg_count=len(messages),
+            error=raw_detail[:1000], req_bytes=req_bytes, msg_count=len(messages),
         )
         yield ("error", {"status": resp.status_code, "message": detail})
         return [], [], None
@@ -2161,7 +2480,7 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
     # ignore the parallel `event:` lines entirely. Some relays/models still emit
     # inline <thinking> tags as ordinary text, so run Anthropic text through the
     # same splitter used by OpenAI-compatible streams.
-    csplitter = _ThinkSplitter()
+    csplitter = _ThinkSplitter(detect_markers=True)
     rsplitter = _ThinkSplitter()
     rsplitter.in_think = True
     usage = {}
@@ -2278,6 +2597,9 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
             error_type=type(e).__name__, error=str(e),
             req_bytes=req_bytes, msg_count=len(messages),
         )
+        # 断线前缓冲里可能还有没吐出来的半句，别丢。
+        for kt in csplitter.flush() + rsplitter.flush():
+            yield kt
         yield ("error", {"status": resp.status_code, "message": str(e)})
         return [], [], usage or None
     for kt in csplitter.flush():

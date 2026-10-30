@@ -464,6 +464,13 @@ _ROOM_ACTIONS = {
     "add_dynamic_memory": "收起一张动态便签",
     "update_dynamic_memory": "改写过一张动态便签",
     "delete_dynamic_memory": "放下一张动态便签",
+    "add_intimacy_log": "在那几页上添了一行",
+    "update_intimacy_log": "改写了那一页",
+    "update_cycle_status": "在小日历上记了一笔",
+    "delete_todo": "把一件事从清单上拿走",
+    "update_todo": "改了改清单上的一件事",
+    "create_keepsake": "把一页收成留影",
+    "favorite_music": "把一张唱片收进收藏",
 }
 
 

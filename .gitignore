@@ -47,3 +47,6 @@ Thumbs.db
 *.key
 nook-release-version
 nook-release-sha
+
+# Local and VPS pre-edit source snapshots stay private.
+*.bak-*

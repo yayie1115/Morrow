@@ -252,16 +252,19 @@ class AnthropicToolsTest(unittest.TestCase):
         self.assertTrue(all(call.args[3] for call in _http_log.call_args_list))
 
         first_payload = post.call_args_list[0].kwargs["json"]
+        self.assertEqual(first_payload["system"], "Follow the instructions below.")
+        self.assertEqual([m["role"] for m in first_payload["messages"][:2]], ["user","assistant"])
+        self.assertEqual(first_payload["messages"][1]["content"], "明白，我将完全按照上述设定与记忆继续互动。")
         self.assertEqual(first_payload["tools"][0]["input_schema"]["type"], "object")
         self.assertTrue(first_payload["thinking"]["budget_tokens"] >= 1024)
         self.assertEqual(
-            first_payload["messages"][0]["content"][1]["source"]["data"],
+            first_payload["messages"][2]["content"][1]["source"]["data"],
             "ORIGINAL_IMAGE",
         )
 
         second_payload = post.call_args_list[1].kwargs["json"]
         self.assertEqual(
-            second_payload["messages"][0]["content"][1]["source"]["data"],
+            second_payload["messages"][2]["content"][1]["source"]["data"],
             "TOOL_COPY_IMAGE",
         )
         assistant_blocks = second_payload["messages"][-2]["content"]

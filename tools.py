@@ -1321,6 +1321,423 @@ def read_room_day(args, session_id):
 
 
 # ---------------------------------------------------------------------------
+# 写入类工具：亲密记录 / 周期 / 待办 / 留影 / 一起听
+# ---------------------------------------------------------------------------
+def _date_text(value):
+    try:
+        return datetime.strptime(str(value or "").strip(), "%Y-%m-%d").date().isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def _time_text(value):
+    try:
+        return datetime.strptime(str(value or "").strip(), "%H:%M").strftime("%H:%M")
+    except (TypeError, ValueError):
+        return None
+
+
+def _clip_text(value, limit):
+    return str(value or "").strip()[:limit]
+
+
+def add_intimacy_log(args, _sid):
+    record_date = _date_text(args.get("date"))
+    record_time = _time_text(args.get("time"))
+    if not record_date or not record_time:
+        return "（亲密记录：日期需要写成 YYYY-MM-DD，时间需要写成 HH:MM。）"
+    note = _clip_text(args.get("note"), 10000)
+    reply = _clip_text(args.get("assistant_reply"), 2000)
+    conn = _connect()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO intimacy_records (record_date, record_time, note, assistant_reply, replied_at) "
+            "VALUES (?,?,?,?,CASE WHEN ?='' THEN NULL ELSE datetime('now','+8 hours') END)",
+            (record_date, record_time, note, reply, reply),
+        )
+        conn.commit()
+        record_id = cursor.lastrowid
+    finally:
+        conn.close()
+    return _kept_json({
+        "ok": True, "record_id": record_id, "record_date": record_date,
+        "record_time": record_time, "has_note": bool(note), "has_reply": bool(reply),
+    })
+
+
+def update_intimacy_log(args, _sid):
+    try:
+        record_id = int(args.get("record_id"))
+    except (TypeError, ValueError):
+        return "（亲密记录：没有给有效的 record_id。）"
+    conn = _connect()
+    try:
+        if conn.execute("SELECT 1 FROM intimacy_records WHERE id=?", (record_id,)).fetchone() is None:
+            return f"（亲密记录：没找到 [{record_id}]。）"
+        updates, params = [], []
+        if args.get("date") is not None:
+            value = _date_text(args.get("date"))
+            if not value:
+                return "（亲密记录：日期需要写成 YYYY-MM-DD。）"
+            updates.append("record_date=?")
+            params.append(value)
+        if args.get("time") is not None:
+            value = _time_text(args.get("time"))
+            if not value:
+                return "（亲密记录：时间需要写成 HH:MM。）"
+            updates.append("record_time=?")
+            params.append(value)
+        note = _clip_text(args.get("note"), 10000)
+        if note:
+            updates.append("note=?")
+            params.append(note)
+        reply = _clip_text(args.get("assistant_reply"), 2000)
+        if reply:
+            updates.append("assistant_reply=?")
+            params.append(reply)
+            updates.append("replied_at=datetime('now','+8 hours')")
+        if not updates:
+            return "（亲密记录：没有给要改的内容。）"
+        conn.execute(
+            "UPDATE intimacy_records SET " + ",".join(updates) + " WHERE id=?",
+            (*params, record_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id,record_date,record_time,note,assistant_reply FROM intimacy_records WHERE id=?",
+            (record_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return _kept_json({"ok": True, **dict(row)})
+
+
+_CYCLE_START_ACTIONS = {"start", "begin", "period_start", "开始", "开始经期", "经期开始"}
+_CYCLE_END_ACTIONS = {"end", "stop", "period_end", "结束", "结束经期", "经期结束"}
+_CYCLE_SET_ACTIONS = {"set", "update", "record", "记录", "更新", "补充"}
+
+
+def update_cycle_status(args, _sid):
+    record_date = _date_text(args.get("date"))
+    if not record_date:
+        return "（周期：日期需要写成 YYYY-MM-DD。）"
+    action = str(args.get("action") or "").strip().lower()
+    if action in _CYCLE_START_ACTIONS:
+        menstruation = 1
+    elif action in _CYCLE_END_ACTIONS:
+        menstruation = 0
+    elif action in _CYCLE_SET_ACTIONS:
+        menstruation = None
+    else:
+        return "（周期：action 只能是 start / end / update。）"
+
+    def _level(name):
+        raw = args.get(name)
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return "bad"
+        return value if value in range(4) else "bad"
+
+    flow, pain = _level("flow"), _level("pain")
+    if flow == "bad" or pain == "bad":
+        return "（周期：flow / pain 只能是 0～3。）"
+    symptoms = args.get("symptoms")
+    if symptoms is not None and not isinstance(symptoms, list):
+        return "（周期：symptoms 需要是症状列表。）"
+
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT menstruation,flow,pain,symptoms FROM cycle_records WHERE record_date=?",
+            (record_date,),
+        ).fetchone()
+        if menstruation is None:
+            menstruation = row["menstruation"] if row is not None else None
+        if flow is None:
+            flow = int(row["flow"] or 0) if row is not None else 0
+        if pain is None:
+            pain = int(row["pain"] or 0) if row is not None else 0
+        if symptoms is None:
+            try:
+                symptoms = json.loads(row["symptoms"] or "[]") if row is not None else []
+            except (TypeError, ValueError):
+                symptoms = []
+            if not isinstance(symptoms, list):
+                symptoms = []
+        cleaned = []
+        for value in symptoms:
+            symptom = _clip_text(value, 30)
+            if symptom and symptom not in cleaned:
+                cleaned.append(symptom)
+        cleaned = cleaned[:20]
+        # 与前端一致：未标记经期时不再保留当日的流量和痛感。
+        if not menstruation:
+            flow, pain = 0, 0
+        conn.execute(
+            "INSERT INTO cycle_records (record_date, menstruation, flow, pain, symptoms) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(record_date) DO UPDATE SET "
+            "menstruation=excluded.menstruation, flow=excluded.flow, pain=excluded.pain, "
+            "symptoms=excluded.symptoms, updated_at=datetime('now', '+8 hours')",
+            (record_date, None if menstruation is None else int(bool(menstruation)),
+             flow, pain, json.dumps(cleaned, ensure_ascii=False)),
+        )
+        if menstruation == 1 and action in _CYCLE_START_ACTIONS:
+            period_days = _int_setting("period_days", 5, 1, 14)
+            start = datetime.strptime(record_date, "%Y-%m-%d").date()
+            for offset in range(1, period_days):
+                following = (start + timedelta(days=offset)).isoformat()
+                conn.execute(
+                    "INSERT INTO cycle_records (record_date, menstruation, flow, pain, symptoms) "
+                    "VALUES (?, 1, 0, 0, '[]') ON CONFLICT(record_date) DO UPDATE SET "
+                    "menstruation=1, updated_at=datetime('now', '+8 hours')",
+                    (following,),
+                )
+        note = args.get("note")
+        if note is not None:
+            note = _clip_text(note, 2000)
+            if note:
+                conn.execute(
+                    "INSERT INTO cycle_private_notes(record_date,content) VALUES (?,?) "
+                    "ON CONFLICT(record_date) DO UPDATE SET content=excluded.content, "
+                    "updated_at=datetime('now','+8 hours')",
+                    (record_date, note),
+                )
+            else:
+                conn.execute("DELETE FROM cycle_private_notes WHERE record_date=?", (record_date,))
+        conn.commit()
+        period_day = None
+        if menstruation == 1:
+            marked = {
+                item["record_date"] for item in conn.execute(
+                    "SELECT record_date FROM cycle_records WHERE menstruation=1 AND record_date<=?",
+                    (record_date,),
+                )
+            }
+            start = datetime.strptime(record_date, "%Y-%m-%d").date()
+            while (start - timedelta(days=1)).isoformat() in marked:
+                start -= timedelta(days=1)
+            period_day = (datetime.strptime(record_date, "%Y-%m-%d").date() - start).days + 1
+    finally:
+        conn.close()
+    return _kept_json({
+        "ok": True, "date": record_date,
+        "menstruation": None if menstruation is None else bool(menstruation),
+        "flow": flow, "pain": pain, "symptoms": cleaned,
+        "period_day": period_day, "action": action,
+    })
+
+
+def delete_todo(args, _sid):
+    try:
+        todo_id = int(args.get("id"))
+    except (TypeError, ValueError):
+        return "（待办：没有给有效的 id。）"
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT text FROM todos WHERE id=?", (todo_id,)).fetchone()
+        if row is None:
+            return f"（待办：没找到 [{todo_id}]。）"
+        conn.execute("DELETE FROM todos WHERE id=?", (todo_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return f"已删掉待办 [{todo_id}]：{row['text']}"
+
+
+def update_todo(args, _sid):
+    try:
+        todo_id = int(args.get("id"))
+    except (TypeError, ValueError):
+        return "（待办：没有给有效的 id。）"
+    text = _clip_text(args.get("text"), 1000)
+    completed = args.get("completed")
+    if completed is not None and not isinstance(completed, bool):
+        return "（待办：completed 需要是 true 或 false。）"
+    if not text and completed is None:
+        return "（待办：没有给要改的内容。）"
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT text FROM todos WHERE id=?", (todo_id,)).fetchone()
+        if row is None:
+            return f"（待办：没找到 [{todo_id}]。）"
+        if text:
+            conn.execute("UPDATE todos SET text=? WHERE id=?", (text, todo_id))
+        if completed is not None:
+            conn.execute(
+                "UPDATE todos SET done=?, done_at=CASE WHEN ?=1 "
+                "THEN datetime('now','+8 hours') ELSE NULL END WHERE id=?",
+                (1 if completed else 0, 1 if completed else 0, todo_id),
+            )
+        conn.commit()
+        current = conn.execute("SELECT id,text,done FROM todos WHERE id=?", (todo_id,)).fetchone()
+    finally:
+        conn.close()
+    return _kept_json({
+        "ok": True, "id": current["id"], "text": current["text"],
+        "done": bool(current["done"]),
+    })
+
+
+def _keepsake_snapshot_message(conn, row):
+    """与 /api/keepsakes 相同的快照口径：只收聊天气泡里真正显示过的内容。"""
+    content = row["content"] or ""
+    try:
+        attachments = json.loads(row["attachments"] or "[]")
+    except (TypeError, ValueError):
+        attachments = []
+    version = {}
+    try:
+        versions = json.loads(row["versions"] or "[]")
+        active = int(row["active"] or 0)
+        if versions and 0 <= active < len(versions) and isinstance(versions[active], dict):
+            version = versions[active]
+            content = version.get("c", content)
+            if isinstance(version.get("a"), list):
+                attachments = version["a"]
+    except (TypeError, ValueError):
+        pass
+    visible_attachments = [
+        item for item in attachments
+        if isinstance(item, dict) and item.get("type") in {"image", "sticker", "text"}
+    ]
+    artifact_ids = version.get("artifact_ids") if isinstance(version.get("artifact_ids"), list) else []
+    run_id = str(version.get("tool_run_id") or "")
+    artifacts = []
+    for artifact in conn.execute(
+        "SELECT id,type,visible_text,source_payload,meta,mime,created_at,version_run_id "
+        "FROM message_artifacts WHERE message_id=? AND status='ready' ORDER BY id",
+        (row["id"],),
+    ):
+        if artifact_ids and str(artifact["id"]) not in {str(value) for value in artifact_ids}:
+            continue
+        if not artifact_ids and str(artifact["version_run_id"] or "") != run_id:
+            continue
+        try:
+            source_payload = json.loads(artifact["source_payload"] or "{}")
+        except (TypeError, ValueError):
+            source_payload = {}
+        try:
+            meta = json.loads(artifact["meta"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        artifacts.append({
+            "type": artifact["type"], "visible_text": artifact["visible_text"] or "",
+            "source_payload": source_payload, "meta": meta,
+            "mime": artifact["mime"] or "", "created_at": artifact["created_at"] or "",
+        })
+    return {
+        "message_id": row["id"], "role": row["role"], "content": content,
+        "attachments": visible_attachments, "artifacts": artifacts,
+        "created_at": row["created_at"] or "",
+    }
+
+
+def create_keepsake(args, session_id):
+    if session_id is None:
+        return "（留影：需要先有当前对话。）"
+    raw = args.get("message_ids")
+    if isinstance(raw, str):
+        raw = [part for part in re.split(r"[,，\s]+", raw) if part]
+    if not isinstance(raw, list):
+        return "（留影：message_ids 需要是消息 id 列表。）"
+    try:
+        message_ids = list(dict.fromkeys(int(value) for value in raw))
+    except (TypeError, ValueError):
+        return "（留影：message_ids 需要是有效的消息 id。）"
+    if not message_ids or len(message_ids) > 10:
+        return "（留影：一条留影最多 10 条消息，至少 1 条。）"
+    caption = _clip_text(args.get("caption"), 1000)
+    reply = _clip_text(args.get("assistant_reply"), 2000)
+    pinned = args.get("pinned") is True
+    conn = _connect()
+    try:
+        session = conn.execute("SELECT id,title FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if session is None:
+            return "（留影：没找到当前对话。）"
+        placeholders = ",".join("?" for _ in message_ids)
+        rows = conn.execute(
+            f"SELECT id,role,content,attachments,versions,active,created_at FROM messages "
+            f"WHERE session_id=? AND hidden=0 AND id IN ({placeholders}) ORDER BY id",
+            (session_id, *message_ids),
+        ).fetchall()
+        if len(rows) != len(message_ids):
+            return "（留影：有消息已经不在这段对话里了，没法收录。）"
+        kept = set()
+        for existing in conn.execute("SELECT message_ids FROM keepsakes").fetchall():
+            try:
+                kept.update(int(value) for value in json.loads(existing["message_ids"] or "[]"))
+            except (TypeError, ValueError):
+                continue
+        overlap = kept.intersection(message_ids)
+        if overlap:
+            return f"（留影：这些消息没法重复收录，已经有留影了：{sorted(overlap)}。）"
+        snapshot = [_keepsake_snapshot_message(conn, row) for row in rows]
+        cursor = conn.execute(
+            "INSERT INTO keepsakes(session_id,session_title,message_ids,snapshot,note,favorite) "
+            "VALUES (?,?,?,?,?,?)",
+            (session_id, session["title"] or "对话",
+             json.dumps([row["id"] for row in rows]),
+             json.dumps(snapshot, ensure_ascii=False), caption, 1 if pinned else 0),
+        )
+        keepsake_id = cursor.lastrowid
+        comment_id = None
+        if reply:
+            comment_id = conn.execute(
+                "INSERT INTO keepsake_comments(keepsake_id,author,content) VALUES (?,'assistant',?)",
+                (keepsake_id, reply),
+            ).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return _kept_json({
+        "ok": True, "keepsake_id": keepsake_id, "session_id": session_id,
+        "message_ids": message_ids, "caption": caption, "pinned": pinned,
+        "comment_id": comment_id,
+    })
+
+
+def favorite_music(args, _sid):
+    song = _music_song(args)
+    if not song:
+        return "（一起听：没有给有效的歌曲 id。）"
+    note = _clip_text(args.get("note"), 2000)
+    conn = _connect()
+    try:
+        library = _music_library_from_conn(conn)
+        favorites = [item for item in library["favorites"] if item["id"] != song["id"]]
+        favorites.insert(0, song)
+        library["favorites"] = favorites[:500]
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES ('music_library',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps(library, ensure_ascii=False, separators=(",", ":")),),
+        )
+        conn.execute(
+            "INSERT INTO music_songs(id,name,artist,album,cover_url,updated_at) "
+            "VALUES (?,?,?,?,?,datetime('now','+8 hours')) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name,artist=excluded.artist,"
+            "album=excluded.album,cover_url=excluded.cover_url,updated_at=excluded.updated_at",
+            (song["id"], song["name"], song["artist"], song["album"], song["cover_url"]),
+        )
+        comment_id = None
+        if note:
+            comment_id = conn.execute(
+                "INSERT INTO music_song_comments(song_id,author,content) VALUES (?,'assistant',?)",
+                (song["id"], note),
+            ).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return _kept_json({
+        "ok": True, "song_id": song["id"], "name": song["name"],
+        "artist": song["artist"], "favorite": True, "comment_id": comment_id,
+    })
+
+
+# ---------------------------------------------------------------------------
 # 注册表：schema（给模型） + 执行器 + 叙事文案（chat 动画用）
 # ---------------------------------------------------------------------------
 _REGISTRY = {
@@ -1606,6 +2023,96 @@ _REGISTRY = {
             "author": {"type": "string", "enum": ["A", "E"],
                        "description": "可选作者筛选；A 是你，E 是Morrow"}},
             "required": ["keyword"]},
+    }),
+    "add_intimacy_log": (add_intimacy_log, "在那几页上添了一行", {
+        "description": (
+            "在亲密记录里新增一条（日期和时间必填），可以同时写下碎碎念与Morrow自己的留言。"
+            "返回新的 record_id，之后可用 update_intimacy_log 继续补写。"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "date": {"type": "string", "description": "日期，格式 YYYY-MM-DD"},
+            "time": {"type": "string", "description": "时间，格式 HH:MM"},
+            "note": {"type": "string", "maxLength": 10000, "description": "这页的碎碎念，可不填"},
+            "assistant_reply": {"type": "string", "maxLength": 2000,
+                                "description": "Morrow留下的留言，可不填"}},
+            "required": ["date", "time"]},
+    }),
+    "update_intimacy_log": (update_intimacy_log, "改写了那一页", {
+        "description": (
+            "按 record_id 修改已有亲密记录，只更新传入的非空字段。可以改日期、时间、碎碎念，"
+            "也可以用新的留言覆盖原来那条留言。"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "record_id": {"type": "integer", "description": "亲密记录 id"},
+            "date": {"type": "string", "description": "新日期 YYYY-MM-DD，可不填"},
+            "time": {"type": "string", "description": "新时间 HH:MM，可不填"},
+            "note": {"type": "string", "maxLength": 10000, "description": "新的碎碎念，可不填"},
+            "assistant_reply": {"type": "string", "maxLength": 2000,
+                                "description": "新的留言，会覆盖旧留言，可不填"}},
+            "required": ["record_id"]},
+    }),
+    "update_cycle_status": (update_cycle_status, "在小日历上记了一笔", {
+        "description": (
+            "代填或更新某一天的周期记录。action=start 标记经期开始（会按设置自动补齐经期天数），"
+            "action=end 标记经期结束，action=update 只改当天的流量、痛感或症状。"
+            "flow / pain 用 0～3 表示程度（0 未填、1 少/轻微、2 中/明显、3 多/难受）。"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "date": {"type": "string", "description": "日期，格式 YYYY-MM-DD"},
+            "action": {"type": "string", "enum": ["start", "end", "update"],
+                       "description": "start 开始经期 / end 结束经期 / update 只更新当日记录"},
+            "flow": {"type": "integer", "minimum": 0, "maximum": 3, "description": "流量程度 0～3"},
+            "pain": {"type": "integer", "minimum": 0, "maximum": 3, "description": "痛感程度 0～3"},
+            "symptoms": {"type": "array", "items": {"type": "string", "maxLength": 30},
+                         "description": "症状列表，如 腰酸 / 头疼"},
+            "note": {"type": "string", "maxLength": 2000, "description": "给这一天的一句备注，可不填"}},
+            "required": ["date", "action"]},
+    }),
+    "delete_todo": (delete_todo, "把一件事从清单上拿走", {
+        "description": "按 id 删除某条待办。需要先用 read_todos 拿到 id。",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer", "description": "待办 id"}},
+            "required": ["id"]},
+    }),
+    "update_todo": (update_todo, "改了改清单上的一件事", {
+        "description": (
+            "修改某条待办的文字或完成状态。completed=true 划掉，completed=false 撤回已完成状态。"
+            "需要先用 read_todos 拿到 id。"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer", "description": "待办 id"},
+            "text": {"type": "string", "maxLength": 1000, "description": "新的待办内容，可不填"},
+            "completed": {"type": "boolean", "description": "true 标记完成 / false 撤回，可不填"}},
+            "required": ["id"]},
+    }),
+    "create_keepsake": (create_keepsake, "把一页收成留影", {
+        "description": (
+            "从当前对话里选 1～10 条消息做成一张留影。可以写背面题注（caption）、"
+            "标星珍藏（pinned），以及先留一句Morrow的话（assistant_reply）。"
+            "不能重复收同一句已经留过的消息。"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "message_ids": {"type": "array", "items": {"type": "integer"},
+                            "minItems": 1, "maxItems": 10, "description": "当前对话里的消息 id 列表"},
+            "caption": {"type": "string", "maxLength": 1000, "description": "留影背面的题注，可不填"},
+            "pinned": {"type": "boolean", "description": "是否标星珍藏，默认 false"},
+            "assistant_reply": {"type": "string", "maxLength": 2000,
+                                "description": "留影下的第一句Morrow的话，可不填"}},
+            "required": ["message_ids"]},
+    }),
+    "favorite_music": (favorite_music, "把一张唱片收进我们的收藏", {
+        "description": (
+            "把一首歌收进 our songs 收藏（会同时出现在一起听的收藏列表里），"
+            "如果传入 note，就以Morrow的身份在这首歌下面留一句话。"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "song_id": {"type": "string", "description": "歌曲 id"},
+            "name": {"type": "string", "description": "歌曲名"},
+            "artist": {"type": "string", "description": "歌手"},
+            "album": {"type": "string", "description": "专辑，可不填"},
+            "cover_url": {"type": "string", "description": "封面地址，可不填"},
+            "note": {"type": "string", "maxLength": 2000, "description": "留给这首歌的话，可不填"}},
+            "required": ["song_id", "name", "artist"]},
     }),
 }
 

@@ -114,3 +114,18 @@ assert.equal(extra[0]._deliveryUnconfirmed,true);
         render=page.split("function renderChatReceiptItems(",1)[1].split("async function loadChatReceipt",1)[0]
         self.assertNotIn("innerHTML",render)
         self.assertIn("textContent",render)
+
+    def test_vps_bubble_metadata_uses_real_saved_summary(self):
+        if not shutil.which("node"):
+            self.skipTest("Node.js unavailable")
+        page=Path("static/index.html").read_text(encoding="utf-8")
+        clock="function fmtClock(ts)"+page.split("function fmtClock(ts)",1)[1].split("const CHAT_PAUSE_MS",1)[0]
+        meta="function aiMetaText(wrap)"+page.split("function aiMetaText(wrap)",1)[1].split("function renderUserBody",1)[0]
+        harness="const MONTH_ABBR=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];const fmtTok=n=>String(n);"
+        checks=r"""
+const assert=require('node:assert/strict');
+const wrap={_usage:[{tokens:115,cache_rate:.839}],_vi:0,_ats:['2026-01-01T21:34:39'],_models:['synthetic']};
+const result=aiMetaText(wrap);assert.match(result,/115 token/);assert.match(result,/84%/);assert.ok(result.endsWith('21:34:39'));
+wrap._models=['已编辑'];assert.match(aiMetaText(wrap),/已编辑/);
+"""
+        subprocess.run(["node","-e",harness+clock+meta+checks],check=True)
