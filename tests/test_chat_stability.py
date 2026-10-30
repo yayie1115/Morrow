@@ -119,7 +119,7 @@ assert.equal(extra[0]._deliveryUnconfirmed,true);
         if not shutil.which("node"):
             self.skipTest("Node.js unavailable")
         page=Path("static/index.html").read_text(encoding="utf-8")
-        clock="function fmtClock(ts)"+page.split("function fmtClock(ts)",1)[1].split("const CHAT_PAUSE_MS",1)[0]
+        clock="function chatTimestamp(value)"+page.split("function chatTimestamp(value)",1)[1].split("const CHAT_PAUSE_MS",1)[0]
         meta="function aiMetaText(wrap)"+page.split("function aiMetaText(wrap)",1)[1].split("function renderUserBody",1)[0]
         harness="const MONTH_ABBR=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];const fmtTok=n=>String(n);"
         checks=r"""

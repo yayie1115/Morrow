@@ -6167,22 +6167,34 @@ $("#log").addEventListener("scroll",()=>{updateToBottom();if($("#log").scrollTop
 toBottomBtn.onclick=()=>scrollDown(true);
 // today → just HH:MM；过去的日子 → "Jul 17 · 18:50"
 const MONTH_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function fmtTime(ts){const t=ts?new Date(ts.replace(" ","T")):new Date(),now=new Date();
-  const hm=t.toTimeString().slice(0,5);
-  const sameDay=t.getFullYear()===now.getFullYear()&&t.getMonth()===now.getMonth()&&t.getDate()===now.getDate();
-  return sameDay?hm:MONTH_ABBR[t.getMonth()]+" "+t.getDate()+" · "+hm;}
-function fmtClock(ts){const t=ts?new Date(String(ts).replace(" ","T")):new Date(),now=new Date();
-  if(Number.isNaN(t.getTime()))return "";
-  const hms=t.toTimeString().slice(0,8);
-  const sameDay=t.getFullYear()===now.getFullYear()&&t.getMonth()===now.getMonth()&&t.getDate()===now.getDate();
-  return sameDay?hms:MONTH_ABBR[t.getMonth()]+" "+t.getDate()+" · "+hms;}
+function chatTimestamp(value){
+  if(value===null||value===undefined||value==="")return new Date();
+  let text=String(value).trim().replace(" ","T");
+  if(!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text))text+="+08:00";
+  return new Date(text);
+}
+function chatDateParts(value){
+  const date=value instanceof Date?value:chatTimestamp(value);
+  if(Number.isNaN(date.getTime()))return null;
+  return Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"}).formatToParts(date).map(p=>[p.type,p.value]));
+}
+function fmtTime(ts){const t=chatDateParts(ts),now=chatDateParts(new Date());
+  if(!t)return "";
+  const hm=t.hour+":"+t.minute,sameDay=t.year===now.year&&t.month===now.month&&t.day===now.day;
+  return sameDay?hm:MONTH_ABBR[Number(t.month)-1]+" "+Number(t.day)+" · "+hm;
+}
+function fmtClock(ts){const t=chatDateParts(ts),now=chatDateParts(new Date());
+  if(!t)return "";
+  const hms=t.hour+":"+t.minute+":"+t.second,sameDay=t.year===now.year&&t.month===now.month&&t.day===now.day;
+  return sameDay?hms:MONTH_ABBR[Number(t.month)-1]+" "+Number(t.day)+" · "+hms;
+}
 const CHAT_PAUSE_MS=4*60*60*1000;
-function chatMessageDate(wrap){const raw=wrap?._ts;if(!raw)return null;const value=new Date(String(raw).replace(" ","T"));return Number.isNaN(value.getTime())?null:value;}
+function chatMessageDate(wrap){const raw=wrap?._ts;if(!raw)return null;const date=chatTimestamp(raw);return Number.isNaN(date.getTime())?null:date;}
 function dailyDividerLabel(current,previous){
-  const sameDay=current.getFullYear()===previous.getFullYear()&&current.getMonth()===previous.getMonth()&&current.getDate()===previous.getDate();
-  if(sameDay)return current.toTimeString().slice(0,5);
-  const weekday=current.toLocaleDateString("en-US",{weekday:"long"}),year=current.getFullYear()===new Date().getFullYear()?"":" · "+current.getFullYear();
-  return MONTH_ABBR[current.getMonth()]+" "+current.getDate()+year+" · "+weekday;
+  const t=chatDateParts(current),p=chatDateParts(previous),now=chatDateParts(new Date());
+  if(t.year===p.year&&t.month===p.month&&t.day===p.day)return t.hour+":"+t.minute;
+  const weekday=current.toLocaleDateString("en-US",{weekday:"long",timeZone:"Asia/Shanghai"}),year=t.year===now.year?"":" · "+t.year;
+  return MONTH_ABBR[Number(t.month)-1]+" "+Number(t.day)+year+" · "+weekday;
 }
 function refreshDailyTimeDividers(){
   const log=$("#log");if(!log)return;log.querySelectorAll(".daily-time-divider").forEach(el=>el.remove());

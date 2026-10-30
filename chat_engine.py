@@ -777,15 +777,8 @@ def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
 
 
 def _history_time_prefix(created_at):
-    """Return the recorded message date/time, including year, without inventing now."""
-    matched = re.match(
-        r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})",
-        str(created_at or "").strip(),
-    )
-    if not matched:
-        return ""
-    year, month, day, hour, minute = matched.groups()
-    return f"[{year}-{month}-{day} {hour}:{minute}] "
+    from message_time import history_time_prefix
+    return history_time_prefix(created_at)
 
 
 def _replay_text(value, limit):
