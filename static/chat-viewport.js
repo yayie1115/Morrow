@@ -15,11 +15,15 @@
     frame=0;
     if(!inChat()||viewport.scale!==1){
       body.classList.remove("chat-keyboard-open");
-      root.style.removeProperty("--chat-viewport-height");root.style.removeProperty("--chat-viewport-top");return;
+      root.style.removeProperty("--chat-viewport-height");root.style.removeProperty("--chat-viewport-top");root.style.removeProperty("--chat-keyboard-overlap");return;
     }
     const active=document.activeElement;
     const editing=active&&active.closest("#view-chat")&&active.matches("input,textarea,[contenteditable='true']");
-    const keyboard=!!editing&&Math.max(innerHeight,root.clientHeight)-viewport.height>120;
+    // A blur can precede the keyboard closing animation. Use actual occlusion,
+    // not focus, to size the bottom inset; never jump it at a 120px threshold.
+    const overlap=Math.max(0,Math.max(innerHeight,root.clientHeight)-viewport.height-viewport.offsetTop);
+    const keyboard=overlap>120&&(!!editing||body.classList.contains("chat-keyboard-open"));
+    root.style.setProperty("--chat-keyboard-overlap",Math.round(overlap)+"px");
     if(body.classList.contains("chat-keyboard-open")!==keyboard)body.classList.toggle("chat-keyboard-open",keyboard);
     const height=Math.max(1,Math.round(viewport.height));
     root.style.setProperty("--chat-viewport-height",height+"px");

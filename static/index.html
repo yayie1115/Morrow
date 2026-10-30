@@ -2956,10 +2956,10 @@
     }
 
     /* Chat owns its visible viewport while the software keyboard is open. */
-    body.in-chat .composer{background:var(--surface-raised);}
+    body.in-chat .composer{background:var(--surface-raised);
+      padding-bottom:max(7px,calc(env(safe-area-inset-bottom) - var(--chat-keyboard-overlap,0px)));}
     body.in-chat #app{position:fixed;left:0;right:0;
       top:var(--chat-viewport-top,0px);height:var(--chat-viewport-height,100dvh);}
-    body.in-chat.chat-keyboard-open .composer{padding-bottom:7px;}
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -4788,7 +4788,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
-<script src="/static/chat-viewport.js?v=4"></script>
+<script src="/static/chat-viewport.js?v=5"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
