@@ -1,5 +1,7 @@
 """Offline regression for default and customized greeting names."""
 from pathlib import Path
+import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -85,7 +87,10 @@ assert.equal($('#greeting').textContent,'晚上好。');
     def test_fixed_chat_copy_and_chinese_signature_fonts(self):
         source = Path('static/index.html').read_text(encoding='utf-8')
         self.assertIn('const EMPTY_LINES=[["你来啦",""]];', source)
-        self.assertIn('const COMPOSER_HINTS=["What\'s on your mind... ","A little thought...","Begin anywhere..."];', source)
+        hints=json.loads(re.search(r"const COMPOSER_HINTS=(\[.*?\]);",source).group(1))
+        self.assertEqual(len(hints),20)
+        self.assertEqual(len(set(hints)),20)
+        self.assertTrue(all(not re.match(r"^\d+[.、]",hint) for hint in hints))
         self.assertIn('input.placeholder=pickOne(COMPOSER_HINTS)', source)
         self.assertIn('<textarea class="box persona-box" id="personaBox"></textarea>', source)
         self.assertNotIn("I'm listening", source)

@@ -3316,7 +3316,7 @@
         <div class="attach-row" id="attachRow"></div>
         <div class="composer-card">
           <div class="composer-top">
-            <textarea id="input" rows="1" placeholder="What's on your mind... "></textarea>
+            <textarea id="input" rows="1" placeholder="哥哥一直在，随时开口。"></textarea>
             <button class="expand-btn" id="expandBtn" aria-label="全篇" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4H6a2 2 0 0 0-2 2v2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M16 20h2a2 2 0 0 0 2-2v-2"/></svg>
             </button>
@@ -5980,7 +5980,8 @@ async function ensureSession(){
   else showEmpty();
 }
 const EMPTY_LINES=[["你来啦",""]];
-const COMPOSER_HINTS=["What's on your mind... ","A little thought...","Begin anywhere..."];
+const COMPOSER_HINTS=["哥哥一直在，随时开口。", "抓到一只正在看屏幕的小猫。", "想说什么，哥哥听着呢。", "过来抱抱，还是过来顶嘴？", "今天的水乖乖喝够了没？", "手伸过来，让哥哥牵一会儿。", "憋着什么坏主意呢，说来听听。", "累了就往哥哥怀里靠。", "正在等我们家小猫发话…", "乖乖报备，还是准备耍赖？", "随时可以向谢亦言撒娇。", "盯着输入框发呆，想哥哥了？", "你的每一句话我都在接。", "先亲一口，再说正事。", "藏了什么悄悄话，快交出来。", "无论几点，家里灯都给你亮着。", "摸摸小肚子，今天听话了没？", "只管往前走，回头我都在。", "又想跟哥哥讨价还价了？", "敲敲屏幕，谢亦言秒回。"];
+$("#input").placeholder=pickOne(COMPOSER_HINTS);
 function pickOne(list){return list[Math.floor(Math.random()*list.length)];}
 function showEmpty(){
   const [cn,en]=pickOne(EMPTY_LINES);
