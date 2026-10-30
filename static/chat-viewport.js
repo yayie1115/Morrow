@@ -4,6 +4,8 @@
   const log=document.getElementById("log"),composer=document.querySelector(".composer"),input=document.getElementById("input");
   if(!viewport||!log||!composer)return;
   let frame=0,settle=0,settling=false,pinned=true,readingTop=0,gesture=false;
+  let composerMotion=null;
+  const reducedMotion=matchMedia("(prefers-reduced-motion: reduce)");
   const inChat=()=>body.classList.contains("in-chat");
   const nearBottom=()=>log.scrollHeight-log.scrollTop-log.clientHeight<120;
   function remember(){pinned=nearBottom();readingTop=log.scrollTop;}
@@ -14,9 +16,13 @@
   function update(){
     frame=0;
     if(!inChat()||viewport.scale!==1){
+      if(composerMotion){composerMotion.cancel();composerMotion=null;}
       body.classList.remove("chat-keyboard-open");
       root.style.removeProperty("--chat-viewport-height");root.style.removeProperty("--chat-viewport-top");root.style.removeProperty("--chat-keyboard-overlap");return;
     }
+    const oldTop=composer.getBoundingClientRect().top;
+    const otherMotion=composer.getAnimations().some(animation=>animation!==composerMotion);
+    if(composerMotion){composerMotion.cancel();composerMotion=null;}
     const active=document.activeElement;
     const editing=active&&active.closest("#view-chat")&&active.matches("input,textarea,[contenteditable='true']");
     // A blur can precede the keyboard closing animation. Use actual occlusion,
@@ -28,6 +34,15 @@
     const height=Math.max(1,Math.round(viewport.height));
     root.style.setProperty("--chat-viewport-height",height+"px");
     root.style.setProperty("--chat-viewport-top",Math.max(0,Math.round(viewport.offsetTop))+"px");
+    // Small compositor-only correction softens sparse Safari keyboard frames.
+    // Never animate the page/header or compete with the attachment-panel animation.
+    const shift=Math.max(-24,Math.min(24,oldTop-composer.getBoundingClientRect().top));
+    if(settling&&!otherMotion&&!reducedMotion.matches&&Math.abs(shift)>.5){
+      const motion=composer.animate([{transform:`translateY(${shift}px)`},{transform:"translateY(0)"}],
+        {duration:90,easing:"cubic-bezier(.2,.7,.3,1)"});
+      composerMotion=motion;
+      motion.onfinish=()=>{if(composerMotion===motion)composerMotion=null;};
+    }
     // Padding must be measured after viewport/safe-area changes, before scrolling.
     window.sakieChatComposerSpace?.();
     place();
