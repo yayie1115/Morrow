@@ -20,7 +20,7 @@
     const keyboard=!!editing&&Math.max(innerHeight,root.clientHeight)-viewport.height>120;
     if(body.classList.contains("chat-keyboard-open")!==keyboard)body.classList.toggle("chat-keyboard-open",keyboard);
     // Keep the same positioning mode before, during and after keyboard animation.
-    for(const [name,value]of [["--chat-viewport-height",Math.round(viewport.height)+"px"],["--chat-viewport-top","0px"]]){
+    for(const [name,value]of [["--chat-viewport-height",Math.round(viewport.height)+"px"],["--chat-viewport-top",Math.max(0,Math.round(viewport.offsetTop))+"px"]]){
       if(root.style.getPropertyValue(name)!==value)root.style.setProperty(name,value);
     }
     if(changing){place();requestAnimationFrame(place);}
@@ -36,16 +36,8 @@
   document.addEventListener("focusin",()=>{if(inChat()){remember();geometry();}});
   document.addEventListener("focusout",geometry);
   viewport.addEventListener("resize",geometry,{passive:true});
-  // Safari's visual pan must not move the application header a second time.
-  viewport.addEventListener("scroll",schedule,{passive:true});
+  viewport.addEventListener("scroll",geometry,{passive:true});
   addEventListener("resize",geometry,{passive:true});
-  window.sakieChatViewport={loaded(){pinned=true;readingTop=0;geometry();}};
-  // Reflow from composer expansion, images or fonts must retain bottom intent.
-  if(window.ResizeObserver){
-    new ResizeObserver(()=>{if(inChat()&&pinned){place();requestAnimationFrame(place);}}).observe(log);
-    const composer=document.querySelector(".composer");
-    if(composer)new ResizeObserver(()=>{if(inChat()&&pinned){place();requestAnimationFrame(place);}}).observe(composer);
-  }
   let wasChat=inChat();
   new MutationObserver(()=>{const now=inChat();if(now!==wasChat){wasChat=now;remember();schedule();}}).observe(body,{attributes:true,attributeFilter:["class"]});
   schedule();
