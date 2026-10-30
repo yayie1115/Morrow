@@ -2958,8 +2958,10 @@
     /* Chat owns its visible viewport while the software keyboard is open. */
     body.in-chat .composer{background:var(--surface-raised);
       padding-bottom:max(7px,calc(env(safe-area-inset-bottom) - var(--chat-keyboard-overlap,0px)));}
-    body.in-chat #app{position:fixed;left:0;right:0;
-      top:var(--chat-viewport-top,0px);height:var(--chat-viewport-height,100dvh);}
+    body.in-chat #app{position:fixed;left:0;right:0;top:0;height:100dvh;}
+    body.in-chat .composer{bottom:var(--chat-keyboard-inset,0px);}
+    body.in-chat .chat-topbar{top:calc(max(10px,env(safe-area-inset-top)) + var(--chat-viewport-top,0px));}
+    body.in-chat.daily-chat .chat-topbar{top:var(--chat-viewport-top,0px);}
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -4788,7 +4790,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
-<script src="/static/chat-viewport.js?v=7"></script>
+<script src="/static/chat-viewport.js?v=8"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -6703,7 +6705,8 @@ function syncComposerSpace(){const h=composerEl?composerEl.offsetHeight:80;
   const covered=plusPopFlowHeight();
   const breathing=document.body.classList.contains("daily-chat")?8:28;
   const base=Math.max(52,h-covered)+breathing;
-  const padding=(base+(plusBottomSpace?covered:0))+"px";
+  const keyboardInset=parseFloat(document.documentElement.style.getPropertyValue("--chat-keyboard-inset"))||0;
+  const padding=(base+(plusBottomSpace?covered:0)+keyboardInset)+"px";
   if($("#log").style.paddingBottom!==padding)$("#log").style.paddingBottom=padding;}
 window.sakieChatComposerSpace=syncComposerSpace;
 if(window.ResizeObserver&&composerEl)new ResizeObserver(syncComposerSpace).observe(composerEl);
