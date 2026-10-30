@@ -4788,7 +4788,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
-<script src="/static/chat-viewport.js?v=2"></script>
+<script src="/static/chat-viewport.js?v=4"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -6118,6 +6118,7 @@ async function loadMessages(scrollToId){
     if(el){jumpTo(el);return;}
   }
   scrollDown(true);
+  window.sakieChatViewport?.loaded();
 }
 function newChat(){initialSessionList=null;initialChatPage=null;sessionId=null;showEmpty();$("#chatTitle").textContent="Morrow";
   COMPRESSION_STATUS=null;resetComposerAttachments();cancelEdit();$("#input").value="";autoGrow();$("#input").focus();}
@@ -6704,6 +6705,7 @@ function syncComposerSpace(){const h=composerEl?composerEl.offsetHeight:80;
   const base=Math.max(52,h-covered)+breathing;
   const padding=(base+(plusBottomSpace?covered:0))+"px";
   if($("#log").style.paddingBottom!==padding)$("#log").style.paddingBottom=padding;}
+window.sakieChatComposerSpace=syncComposerSpace;
 if(window.ResizeObserver&&composerEl)new ResizeObserver(syncComposerSpace).observe(composerEl);
 function updateSendAvailability(){const b=$("#sendBtn");if(!b||streaming||preparingSend)return;
   const hasText=!!input.value.trim(),hasAttachment=attachments.some(a=>a.isImg||a.isText||a.isSticker);
