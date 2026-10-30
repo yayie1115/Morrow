@@ -50,6 +50,77 @@ class KeepsakeApiTest(unittest.TestCase):
         db.commit();db.close()
         return session_id, user_id, assistant_id
 
+    def _assistant_candidates(self, sid, **args):
+        result=tools.execute("read_keepsake_candidates",args,sid)
+        self.assertTrue(result["ok"],result)
+        return json.loads(result["content"])
+
+    def _assistant_args(self, items, **extra):
+        return {"message_ids":[v["message_id"] for v in items],
+                "source_tokens":{str(v["message_id"]):v["source_token"] for v in items},**extra}
+
+    def test_assistant_can_discover_ids_capture_and_retry_without_duplicate(self):
+        sid,user,assistant=self._seed()
+        read=self._assistant_candidates(sid)
+        self.assertEqual([v["message_id"] for v in read["items"]],[user,assistant])
+        self.assertEqual(read["items"][-1]["active_version"],1)
+        self.assertIn("现在看见的回答",read["items"][-1]["preview"])
+        self.assertNotIn("隐藏思考",json.dumps(read,ensure_ascii=False))
+        args=self._assistant_args(read["items"],caption="Synthetic caption",assistant_reply="Synthetic comment")
+        first=tools.execute("create_keepsake",args,sid);self.assertTrue(first["ok"],first)
+        saved=json.loads(first["content"])
+        second=tools.execute("create_keepsake",args,sid);self.assertTrue(second["ok"],second)
+        self.assertEqual(json.loads(second["content"])["keepsake_id"],saved["keepsake_id"])
+        response=self.client.get("/api/keepsakes/"+str(saved["keepsake_id"]))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(len(response.json["comments"]),1)
+        self.assertEqual(response.json["snapshot"][-1]["source_version"],1)
+        self.assertTrue(all(v["already_kept"] for v in self._assistant_candidates(sid)["items"]))
+
+    def test_assistant_candidates_cannot_leak_hidden_or_other_session_messages(self):
+        sid,user,assistant=self._seed();db=sqlite3.connect(app.DB_PATH)
+        other=db.execute("INSERT INTO sessions(title) VALUES ('Other synthetic')").lastrowid
+        db.execute("INSERT INTO messages(session_id,role,content,hidden) VALUES (?,'user','hidden synthetic',1)",(sid,))
+        db.execute("INSERT INTO messages(session_id,role,content) VALUES (?,'user','other synthetic')",(other,));db.commit();db.close()
+        read=self._assistant_candidates(sid,count=1);self.assertEqual(len(read["items"]),1);self.assertTrue(read["has_more"])
+        older=self._assistant_candidates(sid,before_message_id=read["next_before_message_id"])
+        self.assertEqual([v["message_id"] for v in older["items"]],[user])
+        self.assertNotIn("hidden synthetic",json.dumps(read));self.assertNotIn("other synthetic",json.dumps(read))
+        bad=tools.execute("create_keepsake",self._assistant_args(read["items"]),other)
+        self.assertFalse(bad["ok"])
+
+    def test_assistant_rejects_changed_source_and_accepts_fresh_selection(self):
+        sid,user,assistant=self._seed();read=self._assistant_candidates(sid);args=self._assistant_args(read["items"])
+        db=sqlite3.connect(app.DB_PATH);db.execute("UPDATE messages SET active=0 WHERE id=?",(assistant,));db.commit();db.close()
+        result=tools.execute("create_keepsake",args,sid);self.assertFalse(result["ok"])
+        self.assertEqual(self.client.get("/api/keepsakes").json,[])
+        fresh=self._assistant_candidates(sid);self.assertTrue(tools.execute("create_keepsake",self._assistant_args(fresh["items"]),sid)["ok"])
+
+    def test_assistant_rejects_missing_tokens_unsaved_and_invalid_ids(self):
+        sid,user,assistant=self._seed()
+        for args in ({"message_ids":[user]}, {"message_ids":[True],"source_tokens":{}},
+                     {"message_ids":[1.5],"source_tokens":{}},
+                     {"message_ids":[999999],"source_tokens":{"999999":"fabricated"}}):
+            self.assertFalse(tools.execute("create_keepsake",args,sid)["ok"])
+        self.assertFalse(tools.execute("read_keepsake_candidates",{},None)["ok"])
+        self.assertEqual(self.client.get("/api/keepsakes").json,[])
+
+    def test_assistant_capture_retry_is_serialized_and_ui_duplicate_is_rejected(self):
+        from concurrent.futures import ThreadPoolExecutor
+        sid,user,assistant=self._seed();args=self._assistant_args(self._assistant_candidates(sid)["items"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(lambda _:tools.execute("create_keepsake",args,sid),range(2)))
+        self.assertTrue(all(v["ok"] for v in results),results)
+        self.assertEqual(len({json.loads(v["content"])["keepsake_id"] for v in results}),1)
+        self.assertEqual(len(self.client.get("/api/keepsakes").json),1)
+        response=self.client.post("/api/keepsakes",json={"session_id":sid,"message_ids":[user,assistant]})
+        self.assertEqual(response.status_code,409)
+
+    def test_assistant_tool_schema_explains_discovery_and_requires_source_tokens(self):
+        schemas={v["function"]["name"]:v["function"] for v in tools.openai_tools(mcp_server_ids=[])}
+        self.assertIn("read_keepsake_candidates",schemas)
+        self.assertIn("source_tokens",schemas["create_keepsake"]["parameters"]["required"])
+
     def test_create_is_an_immutable_visible_snapshot(self):
         session_id, user_id, assistant_id = self._seed()
         response = self.client.post("/api/keepsakes", json={

@@ -1635,68 +1635,20 @@ def _keepsake_snapshot_message(conn, row):
     }
 
 
+def read_keepsake_candidates(args, session_id):
+    import keepsake_capture
+    from contextlib import closing
+    with closing(_connect()) as conn:
+        try:return _kept_json(keepsake_capture.candidates(conn,args,session_id,_keepsake_snapshot_message))
+        except ValueError as error:return f"（留影读取失败：{error}）"
+
+
 def create_keepsake(args, session_id):
-    if session_id is None:
-        return "（留影：需要先有当前对话。）"
-    raw = args.get("message_ids")
-    if isinstance(raw, str):
-        raw = [part for part in re.split(r"[,，\s]+", raw) if part]
-    if not isinstance(raw, list):
-        return "（留影：message_ids 需要是消息 id 列表。）"
-    try:
-        message_ids = list(dict.fromkeys(int(value) for value in raw))
-    except (TypeError, ValueError):
-        return "（留影：message_ids 需要是有效的消息 id。）"
-    if not message_ids or len(message_ids) > 10:
-        return "（留影：一条留影最多 10 条消息，至少 1 条。）"
-    caption = _clip_text(args.get("caption"), 1000)
-    reply = _clip_text(args.get("assistant_reply"), 2000)
-    pinned = args.get("pinned") is True
-    conn = _connect()
-    try:
-        session = conn.execute("SELECT id,title FROM sessions WHERE id=?", (session_id,)).fetchone()
-        if session is None:
-            return "（留影：没找到当前对话。）"
-        placeholders = ",".join("?" for _ in message_ids)
-        rows = conn.execute(
-            f"SELECT id,role,content,attachments,versions,active,created_at FROM messages "
-            f"WHERE session_id=? AND hidden=0 AND id IN ({placeholders}) ORDER BY id",
-            (session_id, *message_ids),
-        ).fetchall()
-        if len(rows) != len(message_ids):
-            return "（留影：有消息已经不在这段对话里了，没法收录。）"
-        kept = set()
-        for existing in conn.execute("SELECT message_ids FROM keepsakes").fetchall():
-            try:
-                kept.update(int(value) for value in json.loads(existing["message_ids"] or "[]"))
-            except (TypeError, ValueError):
-                continue
-        overlap = kept.intersection(message_ids)
-        if overlap:
-            return f"（留影：这些消息没法重复收录，已经有留影了：{sorted(overlap)}。）"
-        snapshot = [_keepsake_snapshot_message(conn, row) for row in rows]
-        cursor = conn.execute(
-            "INSERT INTO keepsakes(session_id,session_title,message_ids,snapshot,note,favorite) "
-            "VALUES (?,?,?,?,?,?)",
-            (session_id, session["title"] or "对话",
-             json.dumps([row["id"] for row in rows]),
-             json.dumps(snapshot, ensure_ascii=False), caption, 1 if pinned else 0),
-        )
-        keepsake_id = cursor.lastrowid
-        comment_id = None
-        if reply:
-            comment_id = conn.execute(
-                "INSERT INTO keepsake_comments(keepsake_id,author,content) VALUES (?,'assistant',?)",
-                (keepsake_id, reply),
-            ).lastrowid
-        conn.commit()
-    finally:
-        conn.close()
-    return _kept_json({
-        "ok": True, "keepsake_id": keepsake_id, "session_id": session_id,
-        "message_ids": message_ids, "caption": caption, "pinned": pinned,
-        "comment_id": comment_id,
-    })
+    import keepsake_capture
+    from contextlib import closing
+    with closing(_connect()) as conn:
+        try:return _kept_json(keepsake_capture.create(conn,args,session_id,_keepsake_snapshot_message))
+        except ValueError as error:return f"（留影创建失败：{error}）"
 
 
 def favorite_music(args, _sid):
@@ -2085,20 +2037,20 @@ _REGISTRY = {
             "completed": {"type": "boolean", "description": "true 标记完成 / false 撤回，可不填"}},
             "required": ["id"]},
     }),
+    "read_keepsake_candidates": (read_keepsake_candidates, "找出当前对话可留下的片段", {
+        "description": "创建留影前先读取当前对话已保存消息的真实 message_id、source_token、有效版本和是否已留影。不能访问其他对话；尚未保存的本轮回复没有 ID。默认最近5条，可用 before_message_id 向前翻页。不要向用户索要内部ID，也不要凭空猜测ID。",
+        "parameters": {"type":"object","properties":{
+            "count":{"type":"integer","minimum":1,"maximum":10},
+            "before_message_id":{"type":"integer","minimum":1}},"required":[]},
+    }),
     "create_keepsake": (create_keepsake, "把一页收成留影", {
-        "description": (
-            "从当前对话里选 1～10 条消息做成一张留影。可以写背面题注（caption）、"
-            "标星珍藏（pinned），以及先留一句Morrow的话（assistant_reply）。"
-            "不能重复收同一句已经留过的消息。"
-        ),
-        "parameters": {"type": "object", "properties": {
-            "message_ids": {"type": "array", "items": {"type": "integer"},
-                            "minItems": 1, "maxItems": 10, "description": "当前对话里的消息 id 列表"},
-            "caption": {"type": "string", "maxLength": 1000, "description": "留影背面的题注，可不填"},
-            "pinned": {"type": "boolean", "description": "是否标星珍藏，默认 false"},
-            "assistant_reply": {"type": "string", "maxLength": 2000,
-                                "description": "留影下的第一句Morrow的话，可不填"}},
-            "required": ["message_ids"]},
+        "description": "从当前对话选1到10条已保存消息创建留影。先调用 read_keepsake_candidates，使用其真实 message_id 和 source_token。不能选择未落盘回复、隐藏消息或其他会话。来源变化需重新读取。相同选择重试只返回已有留影，不重复创建或留言。只在工具返回 ok=true 后确认保存。",
+        "parameters": {"type":"object","properties":{
+            "message_ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":10},
+            "source_tokens":{"type":"object","additionalProperties":{"type":"string"},"description":"消息ID字符串到候选source_token的映射"},
+            "caption":{"type":"string","maxLength":1000},
+            "pinned":{"type":"boolean"},
+            "assistant_reply":{"type":"string","maxLength":2000}},"required":["message_ids","source_tokens"]},
     }),
     "favorite_music": (favorite_music, "把一张唱片收进我们的收藏", {
         "description": (

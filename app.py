@@ -10203,6 +10203,7 @@ def create_keepsake():
     if not message_ids or len(message_ids) > 10:
         return jsonify({"error": "一张留影请选择 1～10 条消息"}), 400
     db = get_db()
+    db.execute("BEGIN IMMEDIATE")  # Serialize overlap checks with assistant captures.
     session = db.execute("SELECT id,title FROM sessions WHERE id=?", (session_id,)).fetchone()
     if not session:
         return jsonify({"error": "来源对话不存在"}), 404
