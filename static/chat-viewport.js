@@ -4,6 +4,7 @@
   const log=document.getElementById("log"),composer=document.querySelector(".composer"),input=document.getElementById("input");
   if(!viewport||!log||!composer)return;
   let frame=0,settle=0,settling=false,pinned=true,readingTop=0,gesture=false;
+  const standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;
   const inChat=()=>body.classList.contains("in-chat");
   const nearBottom=()=>log.scrollHeight-log.scrollTop-log.clientHeight<120;
   function remember(){pinned=nearBottom();readingTop=log.scrollTop;}
@@ -42,16 +43,31 @@
   log.addEventListener("pointerup",()=>{if(gesture){remember();gesture=false;}},{passive:true});
   // Avoid Safari first panning the document to focus, then our viewport catching up.
   input?.addEventListener("pointerdown",event=>{
-    if(event.isPrimary&&document.activeElement!==input){event.preventDefault();input.focus({preventScroll:true});geometry();}
+    if(standalone&&event.isPrimary&&document.activeElement!==input){event.preventDefault();input.focus({preventScroll:true});geometry();}
   });
   document.addEventListener("focusin",geometry);
   document.addEventListener("focusout",geometry);
   viewport.addEventListener("resize",geometry,{passive:true});
   viewport.addEventListener("scroll",geometry,{passive:true});
   addEventListener("resize",geometry,{passive:true});
+  addEventListener("focus",geometry);
+  addEventListener("pageshow",geometry);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)geometry();});
   if(window.ResizeObserver){new ResizeObserver(schedule).observe(composer);new ResizeObserver(schedule).observe(log);}
   let wasChat=inChat();
   new MutationObserver(()=>{const now=inChat();if(now!==wasChat){wasChat=now;schedule();}}).observe(body,{attributes:true,attributeFilter:["class"]});
-  window.sakieChatViewport={loaded(){pinned=true;readingTop=0;geometry();},follow(){pinned=true;geometry();}};
+  function waitForKeyboardClose(){
+    const active=document.activeElement;
+    if(active?.closest("#view-chat")&&active.matches("input,textarea,[contenteditable='true']"))active.blur();
+    return new Promise(resolve=>{
+      let stable=0,done=false;
+      const gap=()=>Math.max(0,document.getElementById("app").clientHeight-viewport.height-viewport.offsetTop);
+      function finish(ok){if(done)return;done=true;clearTimeout(stable);clearTimeout(deadline);viewport.removeEventListener("resize",check);viewport.removeEventListener("scroll",check);resolve(ok);}
+      function check(){clearTimeout(stable);if(gap()<120)stable=setTimeout(()=>finish(gap()<120),100);}
+      const deadline=setTimeout(()=>finish(gap()<120),700);
+      viewport.addEventListener("resize",check);viewport.addEventListener("scroll",check);check();
+    });
+  }
+  window.sakieChatViewport={loaded(){pinned=true;readingTop=0;geometry();},follow(){pinned=true;geometry();},waitForKeyboardClose,refresh:geometry};
   schedule();
 })();

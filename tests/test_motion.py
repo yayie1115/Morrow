@@ -1,4 +1,6 @@
 import unittest
+import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -16,11 +18,27 @@ class MotionContractTest(unittest.TestCase):
         self.assertIn('.menu-pop{animation:none!important;}', self.page)
         self.assertIn('e.key==="Escape"&&menuPop', self.page)
 
-    def test_settings_drilldown_uses_single_page_fade(self):
+    def test_settings_drilldown_commits_without_transparent_flash(self):
         self.assertIn("function transitionSettingsLayer(stage,current,next,duration=190)", self.page)
-        self.assertIn('{opacity:0},{opacity:1}', self.page)
+        self.assertIn('next.hidden=false;stage.classList.remove("settings-transitioning")', self.page)
         self.assertNotIn('translateX(calc(100% + 18px))', self.page)
         self.assertNotIn('.settings-cover-layer', self.page)
+
+    @unittest.skipUnless(shutil.which("node"), "Node unavailable")
+    def test_settings_navigation_has_no_transparent_intermediate_frame(self):
+        code=self.page[self.page.index("const settingsLayerTransitions=new WeakMap();"):self.page.index("function showSetPanel(")]
+        script=code+"""
+const assert=require('assert');let cancelled=0,removed=0;
+const current={hidden:false,getAnimations:()=>[{cancel:()=>cancelled++}]};
+const next={hidden:true,getAnimations:()=>[]};
+const stage={children:[current,next],classList:{remove:()=>removed++}};
+transitionSettingsLayer(stage,current,next);
+assert.equal(current.hidden,true);assert.equal(next.hidden,false);
+transitionSettingsLayer(stage,next,current);
+assert.equal(current.hidden,false);assert.equal(next.hidden,true);
+assert.equal(removed,2);assert.equal(cancelled,2);
+"""
+        subprocess.run([shutil.which("node"),"-e",script],check=True)
 
     def test_provider_and_mcp_editors_share_the_cover_motion(self):
         self.assertIn('transitionSettingsLayer($("#set-panel-model"),list,edit,180)', self.page)

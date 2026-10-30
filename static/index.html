@@ -4790,7 +4790,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
-<script src="/static/chat-viewport.js?v=8"></script>
+<script src="/static/chat-viewport.js?v=9"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -7674,21 +7674,29 @@ function settlePlusBottomSpace(duration=300){
   };
   plusSpaceAnimation=requestAnimationFrame(frame);
 }
-function togglePlus(show){const on=show??plusPop.hidden;if(plusPopAnimation)plusPopAnimation.cancel();plusBtn.classList.toggle("open",on);
-  const reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if(on){const log=$("#log"),wasAtBottom=log.scrollHeight-log.scrollTop-log.clientHeight<120;plusBottomSpace=wasAtBottom;plusPop.hidden=false;showPlusPage("main");closeStickerPopover();syncComposerSpace();if(reduced)return;
+let plusToggleEpoch=0;
+async function togglePlus(show){const epoch=++plusToggleEpoch,on=show??plusPop.hidden;
+  if(on&&(document.activeElement===input||document.body.classList.contains("chat-keyboard-open"))){
+    const closed=await (window.sakieChatViewport?.waitForKeyboardClose()??Promise.resolve(true));
+    if(epoch!==plusToggleEpoch)return false;
+    if(!closed){toast("键盘还在收起，请再点一下加号");return false;}
+  }
+  if(plusPopAnimation)plusPopAnimation.cancel();plusBtn.classList.toggle("open",on);
+  const reduced=matchMedia("(prefers-reduced-motion: reduce)").matches||matchMedia("(pointer:coarse)").matches;
+  if(on){const log=$("#log"),wasAtBottom=log.scrollHeight-log.scrollTop-log.clientHeight<120;plusBottomSpace=wasAtBottom;plusPop.hidden=false;showPlusPage("main");closeStickerPopover();syncComposerSpace();if(reduced)return true;
     const distance=plusPopFlowHeight();plusPopAnimation=composerEl.animate([{transform:`translateY(${distance}px)`},{transform:"translateY(0)"}],{duration:360,easing:"cubic-bezier(.22,.8,.3,1)"});
     plusPopAnimation.onfinish=()=>{plusPopAnimation=null;composerEl.style.removeProperty("transform");};
   }else if(!plusPop.hidden){closeStickerPopover();if(reduced){plusPop.hidden=true;plusBottomSpace=false;syncComposerSpace();return;}const distance=plusPopFlowHeight();settlePlusBottomSpace(300);
     plusPopAnimation=composerEl.animate([{transform:"translate3d(0,0,0)"},{transform:`translate3d(0,${distance}px,0)`}],{duration:300,easing:"cubic-bezier(.22,.72,.3,1)",fill:"forwards"});
     plusPopAnimation.onfinish=()=>{plusPop.hidden=true;if(!plusSpaceAnimation){plusBottomSpace=false;syncComposerSpace();}plusPopAnimation.cancel();plusPopAnimation=null;};
-  }}
+  }return true;}
 let plusHeld=false,plusHoldTimer=null;
-plusBtn.onpointerdown=()=>{plusHeld=false;clearTimeout(plusHoldTimer);plusHoldTimer=setTimeout(()=>{plusHeld=true;togglePlus(true);requestAnimationFrame(openStickerTray);},430);};
+plusBtn.onpointerdown=()=>{plusHeld=false;clearTimeout(plusHoldTimer);plusHoldTimer=setTimeout(()=>{plusHeld=true;void togglePlus(true).then(opened=>{if(opened)requestAnimationFrame(openStickerTray);});},430);};
 plusBtn.onpointerup=plusBtn.onpointercancel=()=>clearTimeout(plusHoldTimer);
 plusBtn.onclick=(e)=>{e.stopPropagation();if(plusHeld){plusHeld=false;return;}togglePlus();};
 const plusFilePickers=[$("#fileCamera"),$("#fileAlbum"),$("#filePick")];
 plusFilePickers.forEach(picker=>picker.onclick=e=>e.stopPropagation());
+plusFilePickers.forEach(picker=>picker.addEventListener("cancel",()=>window.sakieChatViewport?.refresh()));
 $("#btnCamera").onclick=()=>$("#fileCamera").click();
 $("#btnAlbum").onclick=()=>$("#fileAlbum").click();
 $("#btnFile").onclick=()=>$("#filePick").click();
@@ -7904,6 +7912,7 @@ function onPicked(inp){
   const files=Array.from(inp.files||[]);if(!files.length)return;let imageLimitHit=false,added=0;
   files.forEach(f=>{if(addAttachment(f))added++;else imageLimitHit=true;});
   if(imageLimitHit)toast("一次最多选 9 张图片");inp.value="";if(added)togglePlus(false);
+  if(added)window.sakieChatViewport?.follow();
 }
 $("#fileCamera").onchange=function(){onPicked(this);};
 $("#fileAlbum").onchange=function(){onPicked(this);};
@@ -9299,21 +9308,13 @@ const setLS=(k,v)=>saveLocalPreference(k,JSON.stringify(v));
 // settings drilldown: 入口列表 ↔ 子页
 const settingsLayerTransitions=new WeakMap();
 function transitionSettingsLayer(stage,current,next,duration=190){
-  const token=(settingsLayerTransitions.get(stage)||0)+1;settingsLayerTransitions.set(stage,token);
+  settingsLayerTransitions.set(stage,(settingsLayerTransitions.get(stage)||0)+1);
   [...stage.children].forEach(el=>el.getAnimations().forEach(animation=>animation.cancel()));
-  if(!current||current===next||reducedMotion){
-    [...stage.children].forEach(el=>el.hidden=el!==next);next.hidden=false;return;
-  }
+  // Commit the destination in one paint; transparent fades exposed the wallpaper.
   [...stage.children].forEach(el=>el.hidden=el!==next);
-  stage.classList.add("settings-transitioning");
-  const animation=next.animate([
-    {opacity:0},{opacity:1}
-  ],{duration,easing:"cubic-bezier(.22,.72,.3,1)",fill:"both"});
-  animation.finished.then(()=>{
-    if(settingsLayerTransitions.get(stage)!==token)return;
-    animation.cancel();stage.classList.remove("settings-transitioning");
-  }).catch(()=>{});
+  next.hidden=false;stage.classList.remove("settings-transitioning");
 }
+
 function showSetPanel(name){
   const home=$("#settings-home"),panels=[...$$(".set-panel")],all=[home,...panels];
   const next=name?$("#set-panel-"+name):home;
