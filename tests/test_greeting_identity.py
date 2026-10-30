@@ -162,6 +162,7 @@ assert.deepEqual(GREETING_PREFS,defaultGreetingPrefs());
     def test_keepsake_and_music_render_actual_author_names(self):
         source = Path('static/index.html').read_text(encoding='utf-8')
         identity_code = source[source.index('let IDENTITY='):source.index('async function loadIdentity()')]
+        time_code = source[source.index('function chatTimestamp(value)'):source.index('function fmtTime(ts)')] + source[source.index('function keepsakeDateTime(value'):source.index('function makeKeepsakePhoto(')]
         start = source.index('function renderMusicNotes(')
         music_code = source[start:source.index('\n', start)]
         start = source.index('function renderKeepsakeComments(')
@@ -172,7 +173,9 @@ function element(){return {dataset:{},children:[],parts:new Map(),attributes:{},
 querySelector(key){if(!this.parts.has(key))this.parts.set(key,element());return this.parts.get(key);},
 setAttribute(key,value){this.attributes[key]=value;},appendChild(child){this.children.push(child);}};}
 const document={createElement:()=>element()},box=element(),$=()=>box;
-""" + identity_code + music_code + keepsake_code + """
+""" + identity_code + time_code + music_code + keepsake_code + """
+assert.equal(keepsakeDateTime('2026-10-30T11:05:06Z'),'10/30 19:05');
+assert.equal(keepsakeDateTime('2026-10-31T17:05:06Z','month'),'2026-11');
 const comments=[{author:'user',content:'Fictional note'},{author:'assistant',content:'Fictional reply'}];
 function check(expected){
 renderMusicNotes(comments);
