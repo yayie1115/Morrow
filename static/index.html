@@ -198,6 +198,7 @@
     .view{position:absolute;inset:0;bottom:0;overflow-y:auto;background:transparent;
       -webkit-overflow-scrolling:touch;padding:16px 16px calc(var(--nav-h) + 36px);display:none;animation:viewIn .2s var(--ease);}
     .view.active{display:block;}
+    #view-home{animation:none;}
     @keyframes viewIn{from{opacity:0;}to{opacity:1;}}
     .page-title{font-size:22px;font-weight:600;letter-spacing:-0.01em;margin:8px 4px 16px;}
     .section-title{font-size:17px;font-weight:600;margin:18px 4px 10px;display:flex;
@@ -4789,7 +4790,7 @@
 
   <div class="toast" id="toast"></div>
 
-<script src="/static/ui-preferences.js?v=1"></script>
+<script src="/static/ui-preferences.js?v=2"></script>
 <script src="/static/chat-viewport.js?v=9"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
@@ -4946,8 +4947,8 @@ function applyFavState(wrap){
 let suppressChatAutofocus=false;
 function showView(name){
   if(name!=="chat"&&typeof KEEPSAKE_SELECTING!=="undefined"&&KEEPSAKE_SELECTING)stopKeepsakeSelection();
-  $$(".view").forEach(v=>v.classList.remove("active"));
-  $("#view-"+name).classList.add("active");
+  const destination=$("#view-"+name);
+  $$(".view").forEach(v=>v.classList.toggle("active",v===destination));
   $$(".nav-item").forEach(n=>n.classList.toggle("active",n.dataset.view===name));
   document.body.classList.toggle("in-chat",name==="chat");
   document.body.classList.toggle("in-cycle",name==="cycle");
