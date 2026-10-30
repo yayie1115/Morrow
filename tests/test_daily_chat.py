@@ -15,7 +15,7 @@ class DailyChatStyleContractTest(unittest.TestCase):
         self.assertIn('localStorage.getItem("prefNook")==="1"', self.page)
         self.assertIn('document.body.classList.toggle("ai-bubble",daily)', self.page)
         self.assertIn('document.body.classList.toggle("daily-chat",daily)', self.page)
-        self.assertIn('localStorage.setItem("prefDailyChat",e.target.checked?"1":"0")', self.page)
+        self.assertIn('saveLocalPreference("prefDailyChat",e.target.checked?"1":"0")', self.page)
 
     def test_daily_messages_are_grouped_and_quiet(self):
         self.assertIn('body.daily-chat .message-ai .ai-part:last-of-type{border-radius:17px 17px 17px 4px;}', self.page)
@@ -164,7 +164,7 @@ class DailyChatStyleContractTest(unittest.TestCase):
         self.assertIn('!event.target.closest(".daily-avatar-choice,#dailyAvatarActions")', self.page)
 
     def test_daily_avatar_images_are_device_preferences_and_backed_up(self):
-        self.assertIn('localStorage.setItem(kind==="user"?"dailyUserAvatar":"dailyAssistantAvatar"', self.page)
+        self.assertIn('saveLocalPreference(kind==="user"?"dailyUserAvatar":"dailyAssistantAvatar"', self.page)
         self.assertIn('"prefDailyAvatars","dailyUserAvatar","dailyAssistantAvatar"', self.page)
 
 

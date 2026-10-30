@@ -4660,6 +4660,18 @@ def set_setting(key, value):
     db.commit()
 
 
+@app.route("/api/ui-preferences", methods=["GET", "PUT"])
+@require_auth
+def shared_ui_preferences():
+    import ui_preferences
+    if request.method == "GET":
+        return jsonify({"values": ui_preferences.read(get_db())})
+    try:
+        return jsonify({"values": ui_preferences.save(get_db(), request.get_json(silent=True))})
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
 @app.route("/api/together-date", methods=["GET", "PUT"])
 @require_auth
 def together_date_settings():

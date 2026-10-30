@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#edf4ff" id="themeColor">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="sakie">
   <link rel="manifest" href="/static/manifest.json?v=sakie-1">
   <link rel="icon" type="image/png" sizes="1254x1254" href="/static/icons/home-logo.png?v=portrait-1">
@@ -2946,6 +2946,14 @@
 
     .photo-original-link{position:absolute;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:2;color:#fff;background:rgba(0,0,0,.45);padding:7px 12px;border-radius:14px;font-size:12px;text-decoration:none;}
     .attach-upload-state{position:absolute;left:2px;right:2px;bottom:2px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center;font-size:9px;line-height:15px;color:#fff;background:rgba(0,0,0,.5);border-radius:3px;pointer-events:none;}
+
+    /* Home-screen mode: reserve system status/home areas without moving page scroll. */
+    @media (display-mode:standalone){
+      #app{height:100%;height:100dvh;}
+      .view{padding-top:calc(16px + env(safe-area-inset-top));
+        padding-bottom:calc(var(--nav-h) + 36px + env(safe-area-inset-bottom));}
+      .bottom-nav{bottom:calc(10px + env(safe-area-inset-bottom));}
+    }
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -4773,6 +4781,7 @@
 
   <div class="toast" id="toast"></div>
 
+<script src="/static/ui-preferences.js?v=1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -5064,6 +5073,7 @@ async function showLogin(){
 }
 async function enterApp(fromLogin=false){
   await loadIdentity();
+  void sakieUiPreferences.start(()=>{applyPrefs();applyChatBg();updateToBottom();});
   $("#app").style.display="block";
   initAppNavigation();
   const homeReady=showView("home");loadProviders();startProactivePolling();
@@ -5231,7 +5241,7 @@ let TOGETHER_DATE="",togetherLoaded=false;
 function calendarDate(now=new Date()){return now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0");}
 function legacyTogetherDate(){
   const key="nookStartedAt";let saved=localStorage.getItem(key);
-  if(!saved||Number.isNaN(new Date(saved).getTime())){saved=new Date().toISOString();localStorage.setItem(key,saved);}
+  if(!saved||Number.isNaN(new Date(saved).getTime())){saved=new Date().toISOString();saveLocalPreference(key,saved);}
   return calendarDate(new Date(saved));
 }
 function togetherDays(start=TOGETHER_DATE||legacyTogetherDate(),now=new Date()){
@@ -7255,10 +7265,10 @@ const getProviderId=()=>{const a=getActive();return a?a.pid:null;};
 function applyModel(){const a=getActive(),name=a?a.name:"默认模型";
   $("#modelName").textContent=name;const daily=$("#dailyModelName");if(daily)daily.textContent=name;}
 function readModelChoice(key){try{return JSON.parse(localStorage.getItem(key));}catch{return null;}}
-function writeModelChoice(key,choice){localStorage.setItem(key,JSON.stringify(choice));}
+function writeModelChoice(key,choice){saveLocalPreference(key,JSON.stringify(choice));}
 const getThink=()=>localStorage.getItem("deepThink")==="1";
 function applyThink(){const t=$("#thinkToggle");if(t)t.checked=getThink();}
-$("#thinkToggle").onclick=()=>{localStorage.setItem("deepThink",getThink()?"0":"1");applyThink();
+$("#thinkToggle").onclick=()=>{saveLocalPreference("deepThink",getThink()?"0":"1");applyThink();
   toast(getThink()?"深度思考 已开":"深度思考 已关");};
 const getChatCacheTtl=()=>{
   const v=localStorage.getItem("chatCacheTtl")||"off";
@@ -7288,7 +7298,7 @@ function applyChatCache(){
 }
 $("#chatCacheSeg").onclick=e=>{
   const b=e.target.closest("button[data-cache]");if(!b||b.disabled)return;
-  localStorage.setItem("chatCacheTtl",b.dataset.cache);
+  saveLocalPreference("chatCacheTtl",b.dataset.cache);
   applyChatCache();
 };
 const getContextLimit=()=>{
@@ -7308,8 +7318,8 @@ $("#ctxLimitOpen").onclick=()=>{
 };
 $("#ctxLimitRange").addEventListener("input",e=>{
   const v=parseInt(e.target.value,10);
-  if(v>=501)localStorage.setItem("contextLimit","unlimited");
-  else localStorage.setItem("contextLimit",String(Math.max(1,Math.min(500,v))));
+  if(v>=501)saveLocalPreference("contextLimit","unlimited");
+  else saveLocalPreference("contextLimit",String(Math.max(1,Math.min(500,v))));
   applyContextLimit();
 });
 const getImgLimitOn=()=>localStorage.getItem("imgLimitOn")==="1";
@@ -7326,16 +7336,16 @@ function applyImageStrategy(){
   $("#imgLimitText").textContent=on?("最多发送最近 "+limit+" 张图片"):(latest?"已改为只发最新消息图片":"不限制图片");
 }
 $("#imgLimitToggle").onchange=e=>{
-  localStorage.setItem("imgLimitOn",e.target.checked?"1":"0");
-  if(e.target.checked)localStorage.setItem("latestImagesOnly","0");
+  saveLocalPreference("imgLimitOn",e.target.checked?"1":"0");
+  if(e.target.checked)saveLocalPreference("latestImagesOnly","0");
   applyImageStrategy();
 };
 $("#imgLimitRange").addEventListener("input",e=>{
-  localStorage.setItem("imageLimit",String(e.target.value));applyImageStrategy();
+  saveLocalPreference("imageLimit",String(e.target.value));applyImageStrategy();
 });
 $("#latestImagesOnly").onchange=e=>{
-  localStorage.setItem("latestImagesOnly",e.target.checked?"1":"0");
-  if(e.target.checked)localStorage.setItem("imgLimitOn","0");
+  saveLocalPreference("latestImagesOnly",e.target.checked?"1":"0");
+  if(e.target.checked)saveLocalPreference("imgLimitOn","0");
   applyImageStrategy();
 };
 const chatSetDrawer=$("#chatSetDrawer"),chatSetMask=$("#chatSetMask");
@@ -7552,12 +7562,12 @@ async function compressDailyAvatar(file){
 $("#chatBgPick").onclick=()=>$("#chatBgFile").click();
 $("#chatBgFile").onchange=async function(){
   const f=this.files&&this.files[0];this.value="";if(!f)return;
-  try{localStorage.setItem("chatBgImage",await compressChatBg(f));applyChatBg();toast("背景图已更新");}
+  try{saveLocalPreference("chatBgImage",await compressChatBg(f));applyChatBg();toast("背景图已更新");}
   catch(e){toast("背景图保存失败，换张小一点的试试");}
 };
-$("#chatBgClear").onclick=()=>{localStorage.removeItem("chatBgImage");applyChatBg();toast("已恢复主题底图");};
+$("#chatBgClear").onclick=()=>{removeLocalPreference("chatBgImage");applyChatBg();toast("已恢复主题底图");};
 $("#chatBgOpacity").addEventListener("input",e=>{
-  localStorage.setItem("chatBgOpacity",String(e.target.value));applyChatBg();
+  saveLocalPreference("chatBgOpacity",String(e.target.value));applyChatBg();
 });
 // 抽屉里按供应商分组：点供应商名展开它的模型，看着干净。
 function openModelPicker(storageKey,onPicked){
@@ -7716,7 +7726,7 @@ function recordMusicRecent(song){const saved=cleanMusicSong(song),recent=[saved,
 let musicCommandPollBusy=false;
 async function pollMusicCommands(force=false){if(musicCommandPollBusy||!sessionId||(!force&&!streaming))return;musicCommandPollBusy=true;try{const response=await api("/api/music/commands?session_id="+encodeURIComponent(sessionId));if(!response.ok)return;const commands=await response.json();for(const command of commands){const song=cleanMusicSong(command.payload?.song||{});if(!song.id)continue;await loadMusicLibrary();if(command.action==="play")await playMusic(song,{preserveQueue:true});else{renderMusicList();renderMusicQueue();toast("Morrow把《"+song.name+"》放进接下来的歌里了");}}}catch{}finally{musicCommandPollBusy=false;}}
 function musicDockBounds(){const width=musicPlayer.offsetWidth||66,height=musicPlayer.offsetHeight||66;return{minX:8,maxX:Math.max(8,innerWidth-width-8),minY:Math.max(68,parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sat")||0)+58),maxY:Math.max(68,innerHeight-height-104)};}
-function setMusicDockPosition(left,top,{save=false,snap=false}={}){const bounds=musicDockBounds();let x=Math.max(bounds.minX,Math.min(Number(left)||bounds.maxX,bounds.maxX)),y=Math.max(bounds.minY,Math.min(Number(top)||bounds.maxY,bounds.maxY));if(snap){musicDockSide=x+(musicPlayer.offsetWidth||66)/2<innerWidth/2?"left":"right";x=musicDockSide==="left"?bounds.minX:bounds.maxX;}musicPlayer.style.left=x+"px";musicPlayer.style.top=y+"px";if(save)localStorage.setItem("nookMusicDock",JSON.stringify({side:musicDockSide,top:y}));}
+function setMusicDockPosition(left,top,{save=false,snap=false}={}){const bounds=musicDockBounds();let x=Math.max(bounds.minX,Math.min(Number(left)||bounds.maxX,bounds.maxX)),y=Math.max(bounds.minY,Math.min(Number(top)||bounds.maxY,bounds.maxY));if(snap){musicDockSide=x+(musicPlayer.offsetWidth||66)/2<innerWidth/2?"left":"right";x=musicDockSide==="left"?bounds.minX:bounds.maxX;}musicPlayer.style.left=x+"px";musicPlayer.style.top=y+"px";if(save)saveLocalPreference("nookMusicDock",JSON.stringify({side:musicDockSide,top:y}));}
 function restoreMusicDockPosition(){let saved={};try{saved=JSON.parse(localStorage.getItem("nookMusicDock")||"{}");}catch{}musicDockSide=saved.side==="left"?"left":"right";const bounds=musicDockBounds(),left=musicDockSide==="left"?bounds.minX:bounds.maxX;setMusicDockPosition(left,Number.isFinite(saved.top)?saved.top:bounds.maxY);}
 function showMusicDock(){const wasHidden=musicPlayer.hidden;musicPlayer.hidden=false;restoreMusicDockPosition();if(wasHidden){musicPlayer.classList.remove("appearing");void musicPlayer.offsetWidth;musicPlayer.classList.add("appearing");setTimeout(()=>musicPlayer.classList.remove("appearing"),540);}}
 function renderMusicSharing(){const button=$("#musicDetailShare");button.classList.toggle("on",musicSharing);button.setAttribute("aria-label",musicSharing?"停止和Morrow一起听":"和Morrow一起听");button.title=musicSharing?"正在和Morrow一起听":"和Morrow一起听";musicPlayer.classList.toggle("sharing",musicSharing);}
@@ -8248,7 +8258,7 @@ function setMemoryDrawer(open){
   $("#memoryDrawer").setAttribute("aria-hidden",String(!open));$("#memoryMenuBtn").setAttribute("aria-expanded",String(open));
 }
 function setMemoryMode(mode,load=true){
-  memoryMode=mode==="we"?"we":"light";localStorage.setItem("memoryMode",memoryMode);
+  memoryMode=mode==="we"?"we":"light";saveLocalPreference("memoryMode",memoryMode);
   $("#memoryNookPanel").hidden=memoryMode!=="light";$("#memoryWePanel").hidden=memoryMode!=="we";$("#memoryOmbrePanel").hidden=true;
   $("#memoryModeTitle").textContent=memoryMode==="we"?"we":"inner";$("#memoryModeMark").textContent=memoryMode==="we"?"names we keep":"kept here";
   $$("#memoryNav button").forEach(button=>button.classList.toggle("on",button.dataset.memoryMode===memoryMode));
@@ -8627,7 +8637,7 @@ function tidySmoothDetails(details,open,duration=320){
 async function loadNight(mode=tidyMode){
   tidyMode=["summary","footprint","tool","voice","alarm","keepsake","together"].includes(mode)?mode:"tool";
   if(tidyMode!=="keepsake")resetKeepsakeSearch();
-  localStorage.setItem("tidyMode",tidyMode);
+  saveLocalPreference("tidyMode",tidyMode);
   const titles={summary:"abstract",footprint:"footprint",tool:"tool",voice:"voice",alarm:"alarm",keepsake:"keepsake",together:"together"};
   $("#tidyModeTitle").textContent=titles[tidyMode];
   const drawerMode=tidyMode==="voice"||tidyMode==="alarm"||tidyMode==="keepsake",artifactMode=drawerMode||tidyMode==="together";
@@ -9253,7 +9263,7 @@ $("#studyAutoSave").onclick=async()=>{
 
 /* ---------- 设置 (localStorage + server data) ---------- */
 const LS=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d;}catch{return d;}};
-const setLS=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+const setLS=(k,v)=>saveLocalPreference(k,JSON.stringify(v));
 // settings drilldown: 入口列表 ↔ 子页
 const settingsLayerTransitions=new WeakMap();
 function transitionSettingsLayer(stage,current,next,duration=190){
@@ -9425,11 +9435,11 @@ async function saveAssistantSettings(){
       ASSISTANT_STATE.night=saved.night||ASSISTANT_STATE.night;
       ASSISTANT_STATE.title=saved.title||ASSISTANT_STATE.title;
       ASSISTANT_STATE.vision=saved.vision||ASSISTANT_STATE.vision;
-      localStorage.setItem(FRONT_ASSISTANT_STORAGE,JSON.stringify(local));return true;
+      saveLocalPreference(FRONT_ASSISTANT_STORAGE,JSON.stringify(local));return true;
     }
   }catch{}
   local.title=ASSISTANT_STATE.title;
-  localStorage.setItem(FRONT_ASSISTANT_STORAGE,JSON.stringify(local));return false;
+  saveLocalPreference(FRONT_ASSISTANT_STORAGE,JSON.stringify(local));return false;
 }
 async function loadAssistantSettings(){
   const local=LS(FRONT_ASSISTANT_STORAGE,{});
@@ -9470,7 +9480,7 @@ async function loadAssistantSettings(){
   }catch{}
   if(serverLoaded&&!changed){
     const localOnly={};FRONT_ASSISTANT_KEYS.forEach(key=>localOnly[key]=ASSISTANT_STATE[key]);
-    localStorage.setItem(FRONT_ASSISTANT_STORAGE,JSON.stringify(localOnly));
+    saveLocalPreference(FRONT_ASSISTANT_STORAGE,JSON.stringify(localOnly));
   }
   renderAssistantModels();
 }
@@ -9985,11 +9995,11 @@ $("#tgPush").onchange=async e=>{
   finally{PUSH_STATE.busy=false;syncPushPrefs();}
 };
 $("#tgPushPreview").onchange=async e=>{
-  const previous=PUSH_STATE.preview;PUSH_STATE.preview=e.target.checked;localStorage.setItem("pushPreview",PUSH_STATE.preview?"1":"0");
+  const previous=PUSH_STATE.preview;PUSH_STATE.preview=e.target.checked;saveLocalPreference("pushPreview",PUSH_STATE.preview?"1":"0");
   PUSH_STATE.busy=true;syncPushPrefs();
   try{const subscription=await currentPushSubscription();if(subscription)await savePushSubscription(subscription);
     toast(PUSH_STATE.preview?"通知会显示Morrow说的话":"通知内容已经藏起来了");}
-  catch(error){PUSH_STATE.preview=previous;localStorage.setItem("pushPreview",previous?"1":"0");toast(error.message||"预览设置没有保存好");}
+  catch(error){PUSH_STATE.preview=previous;saveLocalPreference("pushPreview",previous?"1":"0");toast(error.message||"预览设置没有保存好");}
   finally{PUSH_STATE.busy=false;syncPushPrefs();}
 };
 $("#pushTest").onclick=async()=>{
@@ -10083,23 +10093,23 @@ function syncPrefUI(){
   applyAppBg();
   void loadPushPrefs();
 }
-$$("#themeChips button").forEach(b=>b.onclick=()=>{localStorage.setItem("prefTheme",b.dataset.v);applyPrefs();syncPrefUI();});
-$$("#fontChips button").forEach(b=>b.onclick=()=>{localStorage.setItem("prefFont",b.dataset.v);applyPrefs();syncPrefUI();});
-$("#tgNav").onchange=e=>{localStorage.setItem("prefNav",e.target.checked?"1":"0");updateToBottom();};
-$("#tgDailyChat").onchange=e=>{localStorage.setItem("prefDailyChat",e.target.checked?"1":"0");localStorage.removeItem("prefNook");applyPrefs();syncPrefUI();};
+$$("#themeChips button").forEach(b=>b.onclick=()=>{saveLocalPreference("prefTheme",b.dataset.v);applyPrefs();syncPrefUI();});
+$$("#fontChips button").forEach(b=>b.onclick=()=>{saveLocalPreference("prefFont",b.dataset.v);applyPrefs();syncPrefUI();});
+$("#tgNav").onchange=e=>{saveLocalPreference("prefNav",e.target.checked?"1":"0");updateToBottom();};
+$("#tgDailyChat").onchange=e=>{saveLocalPreference("prefDailyChat",e.target.checked?"1":"0");removeLocalPreference("prefNook");applyPrefs();syncPrefUI();};
 let dailyAvatarEditing="";
-$("#tgDailyAvatars").onchange=e=>{localStorage.setItem("prefDailyAvatars",e.target.checked?"1":"0");if(!e.target.checked)dailyAvatarEditing="";applyPrefs();syncPrefUI();};
+$("#tgDailyAvatars").onchange=e=>{saveLocalPreference("prefDailyAvatars",e.target.checked?"1":"0");if(!e.target.checked)dailyAvatarEditing="";applyPrefs();syncPrefUI();};
 $$(".daily-avatar-choice").forEach(button=>button.onclick=()=>{dailyAvatarEditing=button.dataset.kind;syncPrefUI();});
 $("#dailyAvatarPick").onclick=()=>$(dailyAvatarEditing==="user"?"#dailyUserAvatarFile":"#dailyAssistantAvatarFile").click();
 document.addEventListener("pointerdown",event=>{if(dailyAvatarEditing&&!event.target.closest(".daily-avatar-choice,#dailyAvatarActions")){dailyAvatarEditing="";syncPrefUI();}});
 async function saveDailyAvatar(kind,file){
-  if(!file)return;try{localStorage.setItem(kind==="user"?"dailyUserAvatar":"dailyAssistantAvatar",await compressDailyAvatar(file));applyPrefs();syncPrefUI();toast("头像已换好");}
+  if(!file)return;try{saveLocalPreference(kind==="user"?"dailyUserAvatar":"dailyAssistantAvatar",await compressDailyAvatar(file));applyPrefs();syncPrefUI();toast("头像已换好");}
   catch{toast("头像保存失败，换张小一点的试试");}
 }
 $("#dailyUserAvatarFile").onchange=async function(){const f=this.files&&this.files[0];this.value="";await saveDailyAvatar("user",f);};
 $("#dailyAssistantAvatarFile").onchange=async function(){const f=this.files&&this.files[0];this.value="";await saveDailyAvatar("assistant",f);};
-$("#dailyAvatarClear").onclick=()=>{localStorage.removeItem(dailyAvatarEditing==="user"?"dailyUserAvatar":"dailyAssistantAvatar");applyPrefs();syncPrefUI();toast("已恢复默认头像");};
-$("#nightLamp").onclick=()=>{localStorage.setItem("prefNight",prefNight()?"0":"1");applyPrefs();syncPrefUI();};
+$("#dailyAvatarClear").onclick=()=>{removeLocalPreference(dailyAvatarEditing==="user"?"dailyUserAvatar":"dailyAssistantAvatar");applyPrefs();syncPrefUI();toast("已恢复默认头像");};
+$("#nightLamp").onclick=()=>{saveLocalPreference("prefNight",prefNight()?"0":"1");applyPrefs();syncPrefUI();};
 function applyAppBg(){
   const img=localStorage.getItem("appBgImage")||"",op=appBgOpacity(),theme=themeBackground();
   document.documentElement.style.setProperty("--app-bg-image",'url("'+(img||theme.image)+'")');
@@ -10112,12 +10122,12 @@ function applyAppBg(){
 $("#appBgPick").onclick=()=>$("#appBgFile").click();
 $("#appBgFile").onchange=async function(){
   const f=this.files&&this.files[0];this.value="";if(!f)return;
-  try{localStorage.setItem("appBgImage",await compressChatBg(f));applyAppBg();toast("背景图已更新");}
+  try{saveLocalPreference("appBgImage",await compressChatBg(f));applyAppBg();toast("背景图已更新");}
   catch(e){toast("背景图保存失败，换张小一点的试试");}
 };
-$("#appBgClear").onclick=()=>{localStorage.removeItem("appBgImage");applyAppBg();toast("已恢复主题底图");};
+$("#appBgClear").onclick=()=>{removeLocalPreference("appBgImage");applyAppBg();toast("已恢复主题底图");};
 $("#appBgOpacity").addEventListener("input",e=>{
-  localStorage.setItem("appBgOpacity",String(e.target.value));applyAppBg();
+  saveLocalPreference("appBgOpacity",String(e.target.value));applyAppBg();
 });
 
 /* ---------- 提供商 ---------- */
@@ -10660,8 +10670,8 @@ $("#githubBackupRestoreBtn").onclick=async()=>{
 function collectBackupSettings(){const out={};BACKUP_LOCAL_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null)out[k]=v;});return out;}
 function restoreBackupSettings(values){
   if(!values||typeof values!=="object"||Array.isArray(values))return;
-  BACKUP_LOCAL_KEYS.forEach(k=>localStorage.removeItem(k));
-  BACKUP_LOCAL_KEYS.forEach(k=>{if(typeof values[k]==="string")localStorage.setItem(k,values[k]);});
+  BACKUP_LOCAL_KEYS.forEach(k=>removeLocalPreference(k));
+  BACKUP_LOCAL_KEYS.forEach(k=>{if(typeof values[k]==="string")saveLocalPreference(k,values[k]);});
 }
 function backupBusy(on){$("#exportBtn").disabled=on;$("#importBtn").disabled=on;}
 $("#exportBtn").onclick=async()=>{
