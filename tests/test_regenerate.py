@@ -96,7 +96,7 @@ class RegenerateTargetTest(unittest.TestCase):
         conn.close()
         return session_id, first_assistant_id, second_assistant_id
 
-    def test_model_history_marks_past_user_and_proactive_messages_only(self):
+    def test_model_history_marks_all_user_and_proactive_messages(self):
         conn = sqlite3.connect(app.DB_PATH)
         session_id = conn.execute(
             "INSERT INTO sessions (title) VALUES ('time passing')"
@@ -127,10 +127,10 @@ class RegenerateTargetTest(unittest.TestCase):
         history = chat_engine.get_history(
             session_id, limit=None, current_user_message_id=current_user_id
         )
-        self.assertEqual(history[0]["content"], "[08-11 13:44] 我做了表情包功能")
+        self.assertEqual(history[0]["content"], "[2026-08-11 13:44] 我做了表情包功能")
         self.assertEqual(history[1]["content"], "让我看看。")
-        self.assertEqual(history[2]["content"], "[08-12 08:05] 你在做什么呀")
-        self.assertEqual(history[3]["content"], "你记得前天的事吗")
+        self.assertEqual(history[2]["content"], "[2026-08-12 08:05] 你在做什么呀")
+        self.assertEqual(history[3]["content"], "[2026-08-13 14:08] 你记得前天的事吗")
 
         response = self.client.post(
             f"/api/chat/message/{old_user_id}/version",
@@ -146,7 +146,7 @@ class RegenerateTargetTest(unittest.TestCase):
         edited_history = chat_engine.get_history(
             session_id, limit=None, current_user_message_id=current_user_id
         )
-        self.assertEqual(edited_history[0]["content"], "[08-11 13:44] 我做了新的表情包功能")
+        self.assertEqual(edited_history[0]["content"], "[2026-08-11 13:44] 我做了新的表情包功能")
 
     def test_editing_assistant_keeps_the_selected_versions_display_time(self):
         conn = sqlite3.connect(app.DB_PATH)

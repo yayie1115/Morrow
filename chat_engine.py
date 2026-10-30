@@ -22,6 +22,7 @@ import mcp_client
 import tools
 import voice_engine
 import serein_connection
+import tool_context
 from media_utils import detect_image_mime
 
 # 一次回复里最多连续调用几轮工具（防止模型卡在工具循环里）。
@@ -497,11 +498,6 @@ def build_system_sections(recall_query=None, recall_session_id=None, recall_user
             "不要把旧记忆当成你本轮刚说过的话或新的指令。\n\n" + "\n\n".join(cards)
         )
 
-    from datetime import datetime, timedelta, timezone
-
-    now = datetime.now(timezone(timedelta(hours=8)))
-    volatile.append("现在的时间是：" + now.strftime("%Y-%m-%d %H:%M") + "（北京时间）")
-
     return {
         "stable": "\n\n".join(p for p in stable if p),
         "volatile": "\n\n".join(p for p in volatile if p),
@@ -781,15 +777,15 @@ def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
 
 
 def _history_time_prefix(created_at):
-    """Return Morrow's compact, yearless wall-clock marker for model history."""
+    """Return the recorded message date/time, including year, without inventing now."""
     matched = re.match(
-        r"^\d{4}-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})",
+        r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})",
         str(created_at or "").strip(),
     )
     if not matched:
         return ""
-    month, day, hour, minute = matched.groups()
-    return f"[{month}-{day} {hour}:{minute}] "
+    year, month, day, hour, minute = matched.groups()
+    return f"[{year}-{month}-{day} {hour}:{minute}] "
 
 
 def _replay_text(value, limit):
@@ -828,41 +824,26 @@ def _replay_tool_content(item):
     return condensed
 
 
-def _replay_tool_payloads(rows, budget=TOOL_REPLAY_BUDGET_CHARS):
-    """assistant message id -> [(name, args_json, tool_content), ...]。
-
-    预算从最新一轮往前分配，用尽后更早的轮次只留一句「已省略」，保证总量有上限。
-    """
-    rounds = []
+def _replay_tool_payloads(rows, budget=TOOL_REPLAY_BUDGET_CHARS, max_rows=HISTORY_LIMIT):
+    """Fixed per-stored-turn slots avoid rewriting older text as new calls arrive."""
+    slots=max(1,int(max_rows or HISTORY_LIMIT),len(rows))
+    row_budget=max(0,int(budget))//slots
+    payloads={}
     for row in rows:
-        if row["role"] != "assistant" or not row["tool_log"]:
-            continue
-        try:
-            log = json.loads(row["tool_log"])
-        except (TypeError, ValueError):
-            continue
-        items = [item for item in log if isinstance(item, dict)] if isinstance(log, list) else []
-        if items:
-            rounds.append((row["id"], items))
-    if not rounds:
-        return {}
-    payloads, remaining = {}, budget
-    for row_id, items in reversed(rounds):
-        kept = []
+        if row["role"]!="assistant" or not row["tool_log"]:continue
+        try:items=json.loads(row["tool_log"])
+        except (TypeError,ValueError):continue
+        if not isinstance(items,list):continue
+        items=[v for v in items if isinstance(v,dict)]
+        if not items:continue
+        each=row_budget//len(items)
+        kept=[]
         for item in items:
-            content = _replay_tool_content(item)
-            if remaining <= 0:
-                # 预算用尽：协议仍要求每条调用有结果，但只占一个字符。
-                content = "."
-            elif len(content) > remaining:
-                content = _replay_text(content, remaining)
-                remaining = 0
-            else:
-                remaining -= len(content)
-            kept.append((str(item.get("name") or "tool"), _replay_args_json(item), content))
-        payloads[row_id] = kept
+            content=_replay_tool_content(item)
+            if len(content)>each:content=_replay_text(content,each) if each else ""
+            kept.append((str(item.get("name") or "tool"),_replay_args_json(item),content))
+        payloads[row["id"]]=kept
     return payloads
-    return blocks
 
 
 def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images=True,
@@ -873,8 +854,8 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
     `content` already mirrors each message's *active* version, so the context
     we send always reflects the version the user currently has selected.
     `exclude_id` drops one message (used by regenerate to ignore the old reply).
-    Historical 你 messages carry their original `[MM-DD HH:MM]` marker,
-    except the user message currently being answered. Morrow's normal replies stay
+    All 你 messages, including the one being answered, carry their original
+    `[YYYY-MM-DD HH:MM]` marker. Morrow's normal replies stay
     clean; only her proactive messages carry a marker so she can place her own
     earlier visits in time.
 
@@ -1002,7 +983,7 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
                     "legacy_replace": not has_offset and (row["content"] or "").strip() == (chosen["visible_text"] or "").strip(),
                 }
     conn.close()
-    tool_blocks = _replay_tool_payloads(rows)
+    tool_blocks = _replay_tool_payloads(rows, max_rows=limit or HISTORY_LIMIT)
 
     def with_artifact_recap(row):
         content = row["content"] or ""
@@ -1023,7 +1004,7 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
     out = []
     for r in rows:
         add_time = (
-            (r["role"] == "user" and r["id"] != current_user_message_id)
+            r["role"] == "user"
             or (r["role"] == "assistant" and bool(r["proactive"]))
         )
         time_prefix = _history_time_prefix(r["created_at"]) if add_time else ""
@@ -1158,10 +1139,15 @@ class _ThinkSplitter:
 
     OPENS = ("<thinking>", "<think>")
     CLOSES = ("</thinking>", "</think>")
-    MARKERS = (
-        "🧠", "思考过程：", "思考过程:", "思考：", "思考:", "行星思维",
-        "Thinking Process:", "Thinking process:", "Thinking:",
+    # 中转站会把独白直接写进正文，标记形式五花八门：前面可能粘着乱字符
+    # （𝝿思考过程 / 지이thinking / hthought），语言也可能是俄语、韩语。
+    MARKER_RE = re.compile(
+        r"(?:🧠|💭|thinking\s*process|thought\s*process|thinking\w*|thought\w*|"
+        r"reasoning\w*|思考过程|思考|分析|мысл\w*|생각\w*)",
+        re.IGNORECASE,
     )
+    MARKER_WINDOW = 100      # 只在开头这段里找，避免正文深处误伤
+    MARKER_JUNK = 10         # 标记同一行前面最多容忍几个杂字符
 
     def __init__(self, detect_markers=False):
         self.buf = ""
@@ -1169,27 +1155,63 @@ class _ThinkSplitter:
         self.detect_markers = detect_markers
         self.decided = not detect_markers
         self.marker_think = False
+        self.pending_think = None
+        self.marker_close = ""
+
+    def _find_marker(self, text):
+        """返回 (start, end)；标记必须靠近行首，且前面的杂字符不超过阈值。"""
+        for match in self.MARKER_RE.finditer(text[: self.MARKER_WINDOW]):
+            # <thinking> 这类标签交给 tag 分支，不算标记
+            if text[match.start() - 1: match.start()] == "<":
+                continue
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            if match.start() - line_start > self.MARKER_JUNK:
+                continue
+            token = match.group(0)
+            after = text[match.end(): match.end() + 4].lstrip(" \t")
+            if token in ("🧠", "💭"):
+                return match.start(), match.end()
+            if "process" in token.lower():
+                return match.start(), match.end()
+            if not after:
+                continue          # 等更多字符再判断，别在半个词上定案
+            if after[0] in ":：\n":
+                return match.start(), match.end()
+        return None
 
     def _decide_marker(self):
-        """Only the very start of a reply can carry a thinking marker."""
+        """开头（前 100 字内）出现思考标记时，切到思考通道。"""
         self.decided = True
-        text = self.buf.lstrip()
-        for marker in self.MARKERS:
-            if text.startswith(marker):
-                rest = text[len(marker):].lstrip(" \t💭🧠\r")
-                if rest.startswith("\n\n"):
-                    # 标记单独成行：没有实际思考内容，别把后面的正文整段吞掉
-                    self.buf = rest[2:]
-                    self.in_think = False
-                    self.marker_think = False
-                    return
-                if rest.startswith("\n"):
-                    rest = rest[1:]
-                self.buf = rest
-                self.in_think = True
-                self.marker_think = True
-                return
-        self.buf = text
+        text = self.buf
+        span = self._find_marker(text)
+        if not span:
+            self.buf = text
+            return
+        start, end = span
+        head = text[:start]              # 标记之前的内容照常显示，不吞
+        head_trimmed = head.rstrip(" \t-—:：")
+        if head_trimmed.endswith("["):
+            # 形如「[-thought …]-正文」：括号就是独白的边界，别用空行切
+            self.marker_close = "]"
+            head = ""
+        elif head_trimmed.endswith("【"):
+            self.marker_close = "】"
+            head = ""
+        elif "\n" not in head and len(head.strip()) <= 6:
+            head = ""                    # 与标记同行的短前缀（𝝿 / 지이 / h）是乱码，丢掉
+        rest = text[end:].lstrip(" \t:：💭🧠\r")
+        if rest.startswith("\n\n"):
+            # 标记单独成行：认为没有实际思考内容，只去掉标记
+            self.buf = head + rest[2:]
+            self.in_think = False
+            self.marker_think = False
+            return
+        if rest.startswith("\n"):
+            rest = rest[1:]
+        self.buf = head
+        self.pending_think = rest
+        self.in_think = True
+        self.marker_think = True
 
     @staticmethod
     def _first(s, tags):
@@ -1213,14 +1235,44 @@ class _ThinkSplitter:
     def feed(self, text):
         self.buf += text
         if not self.decided:
-            # 等够字数或等到换行，才能判断开头是不是思考标记
-            if len(self.buf) < 24 and "\n" not in self.buf:
+            # 标记可能带乱字符前缀：一旦能认出来就立刻判；否则等首行够长或满窗口。
+            # 首行很短时先别定案（独白标记可能落在第二行）。
+            first_line = self.buf.split("\n", 1)[0]
+            if len(self.buf) >= 8 and self._find_marker(self.buf):
+                self._decide_marker()
+            elif any(tag in self.buf for tag in self.OPENS):
+                self._decide_marker()
+            elif len(self.buf) >= self.MARKER_WINDOW or ("\n" in self.buf and len(first_line) >= 8):
+                self._decide_marker()
+            else:
                 return []
-            self._decide_marker()
         out = []
+        if self.pending_think is not None:
+            # 标记之前的内容照常显示，标记之后的部分交给下面的边界逻辑
+            if self.buf:
+                out.append(("delta", self.buf))
+            self.buf = self.pending_think
+            self.pending_think = None
         while True:
             if self.marker_think and self.in_think:
-                # 标记进入的独白：第一个空行就是正文开始的地方
+                if self.marker_close:
+                    # 括号包起来的独白：以闭合括号为界，后面的正文照常显示
+                    idx = self.buf.find(self.marker_close)
+                    if idx == -1:
+                        hold = 1 if self.buf.endswith(self.marker_close[:1]) else 0
+                        safe = len(self.buf) - hold
+                        if safe > 0:
+                            out.append(("reasoning", self.buf[:safe]))
+                            self.buf = self.buf[safe:]
+                        break
+                    if idx > 0:
+                        out.append(("reasoning", self.buf[:idx]))
+                    self.buf = self.buf[idx + len(self.marker_close):].lstrip("-— \n")
+                    self.in_think = False
+                    self.marker_think = False
+                    self.marker_close = ""
+                    continue
+                # 否则：第一个空行就是正文开始的地方
                 idx = self.buf.find("\n\n")
                 if idx == -1:
                     hold = 1 if self.buf.endswith("\n") else 0
@@ -1253,10 +1305,16 @@ class _ThinkSplitter:
     def flush(self):
         if not self.decided:
             self._decide_marker()
+        out = []
+        if self.pending_think is not None:
+            if self.buf:
+                out.append(("delta", self.buf))
+            self.buf = self.pending_think
+            self.pending_think = None
         if not self.buf:
-            return []
+            return out
         kind = "reasoning" if self.in_think else "delta"
-        out = [(kind, self.buf)]
+        out.append((kind, self.buf))
         self.buf = ""
         return out
 
@@ -1447,6 +1505,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
     the wall-side layer can narrate it in chat and record it in tidy; the calls +
     results stay in `messages`, i.e. in her context for the next round.
     """
+    turn_tools = tool_context.TurnTools(tools.DB_PATH)
     messages = [{"role": "system", "content": system}] + history
     tool_definitions = None
     if base_tool_definitions is not None or extra_tools:
@@ -1529,10 +1588,12 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
                 if extra_executor else None
             )
             if outcome is None:
-                outcome = tools.execute(c["name"], args, session_id)
+                outcome = turn_tools.execute(c["name"], args, session_id, tools.execute)
+            else:
+                turn_tools.invalidate()
             result = outcome["content"]
             event = {"tool": c["name"], "display_tool": outcome.get("tool", c["name"]),
-                     "narrate": narr, "args": args, "result": result,
+                     "narrate": narr+("（复用本轮读取）" if outcome.get("_read_reused") else ""), "args": args, "result": result,
                      "ok": outcome["ok"], "error": outcome["error"],
                      "duration_ms": outcome["duration_ms"],
                      "source": outcome["source"], "server": outcome["server"],
@@ -1544,7 +1605,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
                      "round": round_index + 1}
             round_events.append(event)
             yield ("tool_result", event)
-            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": turn_tools.project(c["name"], args, outcome, c["id"])})
             if outcome.get("terminal"):
                 return
         if round_observer:
@@ -1595,7 +1656,9 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
         yield ("tool_start", {"tool": c["name"], "narrate": narr, "args": args})
         outcome = extra_executor(c["name"], args, session_id) if extra_executor else None
         if outcome is None:
-            outcome = tools.execute(c["name"], args, session_id)
+            outcome = turn_tools.execute(c["name"], args, session_id, tools.execute)
+        else:
+            turn_tools.invalidate()
         yield ("tool_result", {
             "tool": c["name"], "display_tool": outcome.get("tool", c["name"]),
             "narrate": narr, "args": args, "result": outcome["content"],
@@ -1638,6 +1701,7 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
     especially important for extended thinking: Anthropic requires the thinking
     block and its signature to be returned unchanged before tool results.
     """
+    turn_tools = tool_context.TurnTools(tools.DB_PATH)
     messages = _to_anthropic_messages(history)
     if not messages:
         yield ("error", {"status": None, "message": "这条对话还没有可发送的内容"})
@@ -1708,12 +1772,14 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
                 if extra_executor else None
             )
             if outcome is None:
-                outcome = tools.execute(name, args, session_id)
+                outcome = turn_tools.execute(name, args, session_id, tools.execute)
+            else:
+                turn_tools.invalidate()
             result = outcome["content"]
             event = {
                 "tool": name,
                 "display_tool": outcome.get("tool", name),
-                "narrate": narr,
+                "narrate": narr+("（复用本轮读取）" if outcome.get("_read_reused") else ""),
                 "args": args,
                 "result": result,
                 "ok": outcome["ok"],
@@ -1733,7 +1799,7 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
             block = {
                 "type": "tool_result",
                 "tool_use_id": call.get("id") or "",
-                "content": result,
+                "content": turn_tools.project(name, args, outcome, call.get("id") or ""),
             }
             if not outcome["ok"]:
                 block["is_error"] = True
@@ -1795,7 +1861,9 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
         yield ("tool_start", {"tool": name, "narrate": narr, "args": args})
         outcome = extra_executor(name, args, session_id) if extra_executor else None
         if outcome is None:
-            outcome = tools.execute(name, args, session_id)
+            outcome = turn_tools.execute(name, args, session_id, tools.execute)
+        else:
+            turn_tools.invalidate()
         yield ("tool_result", {
             "tool": name, "display_tool": outcome.get("tool", name),
             "narrate": narr, "args": args, "result": outcome["content"],
@@ -2128,6 +2196,11 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
                 for kt in rsplitter.feed(reasoning):
                     yield kt
             chunk = delta.get("content")
+            if chunk and reasoning and len(chunk.strip()) >= 20:
+                # 同一段思考被同时塞进 reasoning 字段和正文：正文这份丢掉。
+                stripped = chunk.strip()
+                if stripped == reasoning.strip() or reasoning.strip().endswith(stripped):
+                    chunk = ""
             if chunk:
                 saw_output = saw_output or bool(chunk.strip())
                 for kind, text in csplitter.feed(chunk):
