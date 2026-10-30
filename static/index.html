@@ -2957,7 +2957,7 @@
 
     /* Chat owns its visible viewport while the software keyboard is open. */
     body.in-chat .composer{background:var(--surface-raised);}
-    body.in-chat.chat-keyboard-open #app{position:fixed;left:0;right:0;
+    body.in-chat #app{position:fixed;left:0;right:0;
       top:var(--chat-viewport-top,0px);height:var(--chat-viewport-height,100dvh);}
     body.in-chat.chat-keyboard-open .composer{padding-bottom:7px;}
   </style>
@@ -4788,7 +4788,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
-<script src="/static/chat-viewport.js?v=1"></script>
+<script src="/static/chat-viewport.js?v=2"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
