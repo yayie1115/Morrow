@@ -231,7 +231,7 @@
     .nav-item .badge{position:absolute;top:6px;right:calc(50% - 18px);width:7px;height:7px;
       border-radius:50%;background:var(--danger);display:none;}
     .nav-item .badge.on{display:block;}
-    body.in-chat .bottom-nav{transform:translateY(calc(100% + max(10px,env(safe-area-inset-bottom))));pointer-events:none;}
+    body.in-chat .bottom-nav{visibility:hidden;pointer-events:none;}
     body.in-chat #view-chat{bottom:0;}
 
     /* ===== 小窝 ===== */
@@ -2954,6 +2954,12 @@
         padding-bottom:calc(var(--nav-h) + 36px + env(safe-area-inset-bottom));}
       .bottom-nav{bottom:calc(10px + env(safe-area-inset-bottom));}
     }
+
+    /* Chat owns its visible viewport while the software keyboard is open. */
+    body.in-chat .composer{background:var(--surface-raised);}
+    body.in-chat.chat-keyboard-open #app{position:fixed;left:0;right:0;
+      top:var(--chat-viewport-top,0px);height:var(--chat-viewport-height,100dvh);}
+    body.in-chat.chat-keyboard-open .composer{padding-bottom:7px;}
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -4782,6 +4788,7 @@
   <div class="toast" id="toast"></div>
 
 <script src="/static/ui-preferences.js?v=1"></script>
+<script src="/static/chat-viewport.js?v=1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
