@@ -33,6 +33,7 @@ from flask import (
     jsonify,
     request,
     send_from_directory,
+    send_file,
     session,
 )
 from werkzeug.utils import secure_filename
@@ -1318,7 +1319,21 @@ def record_user_activity():
 @app.get("/uploads/<path:name>")
 @require_auth
 def uploaded_file(name):
-    return send_from_directory(UPLOAD_DIR, name)
+    kind = request.args.get("preview")
+    if kind in {"thumb", "screen"}:
+        try:
+            from image_delivery import derivative
+            preview, mime = derivative(UPLOAD_DIR, DATA_DIR, name, kind)
+            response = send_file(preview, mimetype=mime, conditional=True)
+        except (OSError, ValueError, ImportError):
+            response = send_from_directory(UPLOAD_DIR, name)
+    else:
+        response = send_from_directory(UPLOAD_DIR, name)
+    response.cache_control.private = True
+    response.cache_control.no_cache = False
+    response.cache_control.max_age = 86400
+    response.vary.add("Cookie")
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -2026,14 +2041,18 @@ def _attachment_from_upload(file_storage):
         path = os.path.join(UPLOAD_DIR, stored)
         with open(path, "wb") as f:
             f.write(blob)
-        return {
-            "type": "image",
-            "name": name,
-            "mime": mime,
-            "path": stored,
-            "url": f"/uploads/{stored}",
-            "size": len(blob),
-        }, None
+        attachment = {
+            "type": "image", "name": name, "mime": mime, "path": stored,
+            "url": f"/uploads/{stored}", "size": len(blob),
+        }
+        try:
+            from image_delivery import derivative
+            copy_path, copy_mime = derivative(UPLOAD_DIR, DATA_DIR, stored, "tool")
+            if copy_mime:
+                attachment["tool_copy"] = {"path":os.path.basename(copy_path), "mime":copy_mime, "size":os.path.getsize(copy_path)}
+        except (OSError, ValueError, ImportError):
+            pass  # Original upload remains usable; model path retains its own fallback.
+        return attachment, None
 
     if mime in ALLOWED_IMAGE_MIMES:
         return None, "图片内容和文件格式对不上，请重新选择图片"

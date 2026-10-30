@@ -181,6 +181,47 @@ class AppSmokeTest(unittest.TestCase):
         message=next(m for m in client.get(f"/api/chat/messages/{sid}").get_json() if m["id"]==done["message_id"])
         self.assertEqual(message["usage"],done["usage"])
 
+    def test_image_upload_preserves_original_and_creates_server_tool_copy(self):
+        import io, hashlib
+        from PIL import Image
+        blob=io.BytesIO();Image.new("RGB",(1800,1200),"#729ac8").save(blob,format="JPEG",quality=95)
+        raw=blob.getvalue();client=app.app.test_client()
+        self.assertEqual(client.post("/api/uploads",data={"file":(io.BytesIO(raw),"synthetic.jpg")}).status_code,401)
+        client.post("/api/login",json={"password":app.AUTH_PASSWORD})
+        response=client.post("/api/uploads",data={"file":(io.BytesIO(raw),"synthetic.jpg")})
+        self.assertEqual(response.status_code,201);attachment=response.get_json()
+        self.assertIn("tool_copy",attachment)
+        from pathlib import Path
+        original=Path(app.UPLOAD_DIR)/attachment["path"]
+        self.assertEqual(hashlib.sha256(original.read_bytes()).digest(),hashlib.sha256(raw).digest())
+        cleaned=app._clean_attachments([attachment]);self.assertEqual(cleaned[0]["tool_copy"],attachment["tool_copy"])
+        with Image.open(Path(app.UPLOAD_DIR)/attachment["tool_copy"]["path"]) as image:
+            self.assertLessEqual(max(image.size),1568)
+            self.assertLessEqual(image.width*image.height,1155000)
+
+    def test_image_preview_is_private_cached_and_keeps_original(self):
+        import io
+        from PIL import Image
+        from pathlib import Path
+        client=app.app.test_client();client.post("/api/login",json={"password":app.AUTH_PASSWORD})
+        blob=io.BytesIO();Image.new("RGB",(2400,1600),"#729ac8").save(blob,format="JPEG",quality=95)
+        raw=blob.getvalue()
+        attachment=client.post("/api/uploads",data={"file":(io.BytesIO(raw),"synthetic.jpg")}).get_json()
+        url=attachment["url"]
+        response=client.get(url+"?preview=thumb");self.assertEqual(response.status_code,200)
+        self.assertEqual(response.mimetype,"image/webp")
+        self.assertLess(len(response.data),len(raw))
+        with Image.open(io.BytesIO(response.data)) as image:self.assertLessEqual(max(image.size),640)
+        self.assertIn("private",response.headers["Cache-Control"])
+        self.assertNotIn("no-cache",response.headers["Cache-Control"])
+        self.assertIn("Cookie",response.headers["Vary"])
+        etag=response.headers["ETag"];response.close()
+        cached=client.get(url+"?preview=thumb",headers={"If-None-Match":etag})
+        self.assertEqual(cached.status_code,304);cached.close()
+        original=client.get(url);self.assertEqual(original.data,raw);original.close()
+        self.assertEqual(Path(app.UPLOAD_DIR,attachment["path"]).read_bytes(),raw)
+        self.assertEqual(app.app.test_client().get(url+"?preview=thumb").status_code,401)
+
     @staticmethod
     def _local_model_stream(session_id, **_kwargs):
         args = {"text": "冒烟测试待办"}

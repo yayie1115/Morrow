@@ -129,3 +129,24 @@ const result=aiMetaText(wrap);assert.match(result,/115 token/);assert.match(resu
 wrap._models=['已编辑'];assert.match(aiMetaText(wrap),/已编辑/);
 """
         subprocess.run(["node","-e",harness+clock+meta+checks],check=True)
+
+    def test_attachment_upload_is_deduplicated_bounded_and_ordered(self):
+        if not shutil.which("node"):
+            self.skipTest("Node.js unavailable")
+        page=Path("static/index.html").read_text(encoding="utf-8")
+        code="const attachmentUploadQueue=[]"+page.split("const attachmentUploadQueue=[]",1)[1].split("async function uploadAttachmentFile",1)[0]
+        harness=r"""
+const assert=require('node:assert/strict');let calls=0,active=0,maximum=0;
+const attachments=[],renderAttach=()=>{};
+async function uploadAttachmentFile(file,name){calls++;active++;maximum=Math.max(maximum,active);await new Promise(r=>setTimeout(r,5));active--;return {path:name};}
+"""
+        checks=r"""
+(async()=>{
+const a={file:{},name:'a'},b={file:{},name:'b'},c={file:{},name:'c'};
+const first=prepareAttachmentUpload(a);assert.equal(prepareAttachmentUpload(a),first);
+const saved=await uploadAttachments([a,b,c]);await first;
+assert.deepEqual(saved.map(v=>v.path),['a','b','c']);assert.equal(calls,3);assert.ok(maximum<=2);
+await uploadAttachments([a,b,c]);assert.equal(calls,3);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+        subprocess.run(["node","-e",harness+code+checks],check=True)

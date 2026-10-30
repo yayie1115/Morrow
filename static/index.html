@@ -2943,6 +2943,9 @@
     .chat-receipt-body{max-width:560px;max-height:240px;overflow-y:auto;overscroll-behavior:contain;text-align:left;margin:4px auto 0;padding:10px 13px;border:1px solid var(--border);border-radius:12px;background:var(--glass);overflow-wrap:anywhere;}
     .chat-receipt-item+.chat-receipt-item{margin-top:9px;padding-top:8px;border-top:1px solid var(--border);}
     .chat-receipt-item small{opacity:.8;font-size:10px;}.chat-receipt-error{color:var(--danger);margin-top:3px;}
+
+    .photo-original-link{position:absolute;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:2;color:#fff;background:rgba(0,0,0,.45);padding:7px 12px;border-radius:14px;font-size:12px;text-decoration:none;}
+    .attach-upload-state{position:absolute;left:2px;right:2px;bottom:2px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center;font-size:9px;line-height:15px;color:#fff;background:rgba(0,0,0,.5);border-radius:3px;pointer-events:none;}
   </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -4333,6 +4336,7 @@
     </button>
     <img id="photoLightboxImage" alt="">
     <div class="photo-lightbox-count" id="photoLightboxCount"></div>
+    <a id="photoOriginalLink" class="photo-original-link" target="_blank" rel="noopener">原图</a>
   </div>
 
   <div class="cycle-modal-mask" id="cycleSymptomsMask"></div>
@@ -6099,7 +6103,7 @@ async function loadMessages(scrollToId){
   scrollDown(true);
 }
 function newChat(){initialSessionList=null;initialChatPage=null;sessionId=null;showEmpty();$("#chatTitle").textContent="Morrow";
-  COMPRESSION_STATUS=null;attachments=[];renderAttach();cancelEdit();$("#input").value="";autoGrow();$("#input").focus();}
+  COMPRESSION_STATUS=null;resetComposerAttachments();cancelEdit();$("#input").value="";autoGrow();$("#input").focus();}
 
 async function loadCompressionStatus(renderBoundary=false){
   if(!sessionId){COMPRESSION_STATUS=null;return null;}
@@ -6363,18 +6367,29 @@ function applyDeckLayout(wrap,deck){
 function setDeckMode(wrap,deck,mode){
   wrap._deckMode=mode;applyDeckLayout(wrap,deck);scrollDown();
 }
+function chatImageUrl(value,kind="thumb"){
+  try{const url=new URL(value,location.href);
+    if(url.origin===location.origin&&url.pathname.startsWith("/uploads/")){url.searchParams.set("preview",kind);return url.pathname+url.search;}
+  }catch{}return value;
+}
 function openPhotoViewer(wrap,index,origin){
   if(photoViewerOpening)return;photoViewerOpening=true;photoViewerOrigin=origin;
   origin?.classList.add("drawn");
   const images=(wrap._attachments||[]).filter(a=>a.type==="image"&&a.url),item=images[index];
   if(!item){photoViewerOpening=false;origin?.classList.remove("drawn");return;}
-  setTimeout(()=>{
+  (()=>{
     const box=$("#photoLightbox"),img=$("#photoLightboxImage");
-    clearTimeout(photoViewerHideTimer);img.src=item.url;img.alt=item.name||"图片";
+    clearTimeout(photoViewerHideTimer);img.src=chatImageUrl(item.url);img.alt=item.name||"图片";
+    box._imageUrl=item.url;
+    const original=$("#photoOriginalLink");
+    try{const safe=new URL(item.url,location.href);original.hidden=!["http:","https:","blob:"].includes(safe.protocol);if(!original.hidden)original.href=safe.href;else original.removeAttribute("href");}catch{original.hidden=true;original.removeAttribute("href");}
+    const full=chatImageUrl(item.url,"screen"),preview=new Image();preview.decoding="async";
+    preview.onload=()=>{if(!box.hidden&&box._imageUrl===item.url)img.src=full;};
+    preview.src=full;
     $("#photoLightboxCount").textContent=(index+1)+" / "+images.length;
     box.hidden=false;requestAnimationFrame(()=>box.classList.add("on"));
     $("#photoLightboxClose").focus();photoViewerOpening=false;
-  },150);
+  })();
 }
 function closePhotoViewer(){
   const box=$("#photoLightbox");if(box.hidden)return;
@@ -6426,7 +6441,7 @@ function renderUserBody(wrap){
     imageItems.forEach((a,i)=>{
       const card=document.createElement("button");card.className="photo-card";card.type="button";
       card.setAttribute("aria-label","查看第 "+(i+1)+" 张图片");
-      const img=document.createElement("img");img.src=a.url;img.alt=a.name||("图片 "+(i+1));card.appendChild(img);
+      const img=document.createElement("img");img.src=chatImageUrl(a.url);img.loading="lazy";img.decoding="async";img.alt=a.name||("图片 "+(i+1));card.appendChild(img);
       card.onclick=e=>{e.stopPropagation();if(wrap._deckMode==="spread")openPhotoViewer(wrap,i,card);};
       deck.appendChild(card);
     });
@@ -6442,7 +6457,7 @@ function renderUserBody(wrap){
   }else if(imageItems.length){
     const imgs=document.createElement("div");imgs.className="u-images";
     imageItems.forEach((a,i)=>{
-      const img=document.createElement("img");img.src=a.url;img.alt=a.name||"图片";img.tabIndex=0;img.setAttribute("role","button");
+      const img=document.createElement("img");img.src=chatImageUrl(a.url);img.loading="lazy";img.decoding="async";img.alt=a.name||"图片";img.tabIndex=0;img.setAttribute("role","button");
       img.onclick=e=>{e.stopPropagation();openPhotoViewer(wrap,i,img);};
       img.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openPhotoViewer(wrap,i,img);}};
       imgs.appendChild(img);
@@ -7858,65 +7873,55 @@ function addAttachment(file){
   const item={file,name:file.name,isImg,
     isText:/\.(txt|md|markdown)$/.test(lower)||file.type.startsWith("text/"),url:null};
   if(item.isImg)item.url=URL.createObjectURL(file);
-  attachments.push(item);renderAttach();return true;
+  attachments.push(item);
+  if(item.isImg||item.isText)void prepareAttachmentUpload(item).catch(()=>{});
+  renderAttach();return true;
+}
+const attachmentUploadQueue=[];let activeAttachmentUploads=0;
+function pumpAttachmentUploads(){
+  while(activeAttachmentUploads<2&&attachmentUploadQueue.length){
+    const job=attachmentUploadQueue.shift();activeAttachmentUploads++;
+    Promise.resolve().then(job.run).then(job.resolve,job.reject).finally(()=>{activeAttachmentUploads--;pumpAttachmentUploads();});
+  }
+}
+function prepareAttachmentUpload(item){
+  if(item._uploaded)return Promise.resolve(item._uploaded);
+  if(item._uploadPromise)return item._uploadPromise;
+  item._uploadState="上传中";
+  item._uploadPromise=new Promise((resolve,reject)=>{attachmentUploadQueue.push({resolve,reject,run:async()=>{
+    if(item._removed)throw new Error("已取消附件");
+    item._uploadController=new AbortController();
+    try{
+      const saved=await uploadAttachmentFile(item.file,item.name||"image",item._uploadController.signal);
+      item._uploaded=saved;item._uploadState="已备好";if(attachments.includes(item))renderAttach();return saved;
+    }catch(error){item._uploadState="上传失败，可重试";item._uploadPromise=null;if(attachments.includes(item))renderAttach();throw error;}
+  }});pumpAttachmentUploads();});
+  // Selection starts transfer only; no chat or model call occurs until Send.
+  item._uploadPromise.catch(()=>{});return item._uploadPromise;
 }
 async function uploadAttachments(items){
-  const out=[];
-  for(const item of items){
-    if(item.isSticker){out.push(item.saved);continue;}
-    const original=await uploadAttachmentFile(item.file,item.name||"image");
-    if(item.isImg){
-      try{
-        const copy=await makeToolImageCopy(item.file,item.name||"image");
-        if(copy){
-          const saved=await uploadAttachmentFile(copy.file,copy.name);
-          original.tool_copy={path:saved.path,mime:saved.mime,size:saved.size};
-        }
-      }catch(e){console.warn("tool image copy skipped",e);}
-    }
-    out.push(original);
-  }
-  return out;
+  return Promise.all(items.map(item=>item.isSticker?item.saved:prepareAttachmentUpload(item)));
 }
-async function uploadAttachmentFile(file,name){
+async function uploadAttachmentFile(file,name,signal){
   const fd=new FormData();fd.append("file",file,name);
-  const r=await fetch("/api/uploads",{method:"POST",body:fd});
+  const r=await fetch("/api/uploads",{method:"POST",body:fd,signal});
   const body=await r.json().catch(()=>({error:"上传失败"}));
   if(!r.ok)throw new Error(body.error||"上传失败");
   return body;
 }
-async function makeToolImageCopy(file,name){
-  if(!file||!(file.type?.startsWith("image/")||/\.(png|jpe?g|webp|gif)$/i.test(name||file.name||"")))return null;
-  const bitmap=await createImageBitmap(file,{imageOrientation:"from-image"});
-  try{
-    const maxSide=1568,maxPixels=1150000;
-    const scale=Math.min(1,maxSide/Math.max(bitmap.width,bitmap.height),
-      Math.sqrt(maxPixels/(bitmap.width*bitmap.height)));
-    const width=Math.max(1,Math.round(bitmap.width*scale));
-    const height=Math.max(1,Math.round(bitmap.height*scale));
-    const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;
-    const ctx=canvas.getContext("2d",{alpha:false});if(!ctx)return null;
-    ctx.fillStyle="#fff";ctx.fillRect(0,0,width,height);
-    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
-    ctx.drawImage(bitmap,0,0,width,height);
-    const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",.84));
-    if(!blob||scale===1&&blob.size>=file.size)return null;
-    const stem=(name||"image").replace(/\.[^.]+$/,"").slice(0,90)||"image";
-    return {file:new File([blob],stem+"-tool.jpg",{type:"image/jpeg"}),name:stem+"-tool.jpg"};
-  }finally{bitmap.close?.();}
-}
 function renderAttach(){
   const row=$("#attachRow");row.innerHTML="";
   attachments.forEach((a,i)=>{const chip=document.createElement("div");chip.className="attach-chip";
-    chip.innerHTML=(a.isImg||a.isSticker)?'<img src="'+a.url+'">'
+    chip.innerHTML=(a.isImg||a.isSticker)?'<img src="'+(a._uploaded?chatImageUrl(a._uploaded.url):a.url)+'">'
       :'<div class="file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg><span>'+a.name+'</span></div>';
+    if(a._uploadState){const state=document.createElement("small");state.className="attach-upload-state";state.textContent=a._uploadState;chip.appendChild(state);}
     const rm=document.createElement("button");rm.className="rm";rm.textContent="×";
-    rm.onclick=()=>{if(!a.existing&&a.url)URL.revokeObjectURL(a.url);attachments.splice(i,1);renderAttach();};
+    rm.onclick=()=>{a._removed=true;a._uploadController?.abort();if(!a.existing&&a.url)URL.revokeObjectURL(a.url);attachments.splice(i,1);renderAttach();};
     chip.appendChild(rm);row.appendChild(chip);});
   updateSendAvailability();syncComposerSpace();
 }
 function resetComposerAttachments(){
-  attachments.forEach(a=>{if(!a.existing&&a.url)URL.revokeObjectURL(a.url);});
+  attachments.forEach(a=>{a._removed=true;a._uploadController?.abort();if(!a.existing&&a.url)URL.revokeObjectURL(a.url);});
   attachments=[];renderAttach();
 }
 
@@ -7969,7 +7974,7 @@ function renderMomentsCalendar(data){
   for(let day=1;day<=days;day++){const value=MOMENTS_MONTH+"-"+String(day).padStart(2,"0"),button=document.createElement("button");button.className="moments-day"+(active.has(value)?" has":"")+(value===MOMENTS_DATE?" on":"");button.innerHTML=day+"<small>"+week[new Date(year,month-1,day).getDay()]+"</small>";button.onclick=()=>{MOMENTS_DATE=value;loadMoments();};strip.appendChild(button);}
   requestAnimationFrame(()=>strip.querySelector(".on")?.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"}));
 }
-function renderMomentsPhotos(data){const box=$("#momentsPhotos");box.innerHTML="";$("#momentsPhotoCount").textContent=data.images.length+" photos";if(!data.images.length){box.innerHTML='<div class="moments-empty" style="grid-column:1/-1">这段时光里还没有图片</div>';return;}const fake={_attachments:data.images.map(x=>({type:"image",url:x.url,name:x.name}))};data.images.forEach((item,index)=>{const button=document.createElement("button");button.className="moments-photo";button.innerHTML='<img loading="lazy" alt="">';button.querySelector("img").src=item.url;button.querySelector("img").alt=item.name||"聊天图片";button.onclick=()=>openPhotoViewer(fake,index,button);box.appendChild(button);});}
+function renderMomentsPhotos(data){const box=$("#momentsPhotos");box.innerHTML="";$("#momentsPhotoCount").textContent=data.images.length+" photos";if(!data.images.length){box.innerHTML='<div class="moments-empty" style="grid-column:1/-1">这段时光里还没有图片</div>';return;}const fake={_attachments:data.images.map(x=>({type:"image",url:x.url,name:x.name}))};data.images.forEach((item,index)=>{const button=document.createElement("button");button.className="moments-photo";button.innerHTML='<img loading="lazy" alt="">';button.querySelector("img").src=chatImageUrl(item.url);button.querySelector("img").alt=item.name||"聊天图片";button.onclick=()=>openPhotoViewer(fake,index,button);box.appendChild(button);});}
 async function loadMoments(){
   const url="/api/moments?month="+encodeURIComponent(MOMENTS_MONTH)+(MOMENTS_DATE?"&date="+encodeURIComponent(MOMENTS_DATE):"");
   try{const response=await api(url),data=await response.json();if(!response.ok)throw new Error();MOMENTS_DATA=data;const selected=data.daily.find(item=>item.date===MOMENTS_DATE),today=localDateKey(new Date()),isToday=MOMENTS_DATE===today;$("#momentsDayMessages").textContent=momentsNumber(MOMENTS_DATE?(selected?.message_count||0):data.totals.month_message_count);$("#momentsDayLabel").textContent=isToday?"today":MOMENTS_DATE?MOMENTS_DATE.slice(5).replace("-","/"):"this month";$("#momentsMessages").textContent=momentsNumber(data.totals.message_count);$("#momentsWords").textContent=momentsNumber(data.totals.text_units);renderMomentsCalendar(data);renderMomentsChart(data);renderMomentsPhotos(data);$("#momentsCurveTitle").textContent=MOMENTS_DATE?MOMENTS_DATE.slice(5).replace("-","/")+" · through the day":"this month";$("#momentsPhotoTitle").textContent=isToday?"the day's little windows":MOMENTS_DATE?"that day's little windows":"latest little windows";$("#momentsToDay").hidden=!MOMENTS_DATE||isToday||!data.conversations.length;}catch{$("#momentsPhotos").innerHTML='<div class="moments-empty" style="grid-column:1/-1">时光页暂时没有翻开</div>';}
