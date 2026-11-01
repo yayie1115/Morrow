@@ -2793,7 +2793,7 @@ def _receipt_error(detail, status=None):
 
 def _record_chat_error(conn, session_id, message_id, run_id, detail, status=None):
     receipt = _receipt_error(detail, status)
-    exists = conn.execute("SELECT id FROM tool_calls WHERE session_id=? AND run_id=? AND source='receipt' LIMIT 1",
+    exists = conn.execute("SELECT id FROM tool_calls WHERE session_id=? AND run_id=? AND tool='_chat_error_receipt' LIMIT 1",
                           (session_id, run_id)).fetchone()
     if exists:
         receipt["id"] = exists[0]
@@ -2832,13 +2832,13 @@ def get_chat_receipts(message_id):
     for row in reversed(rows[:100]):
         failed = row["status"] == "error"
         error = _receipt_error(row["error"]) if failed else None
-        label = "回复报错" if row["source"] == "receipt" else (row["narrate"] or "工具调用")
+        label = "回复报错" if row["tool"] == "_chat_error_receipt" else (row["narrate"] or "工具调用")
         # Names are display labels only. Strip common credential forms defensively.
         label = re.sub(r"(?i)(bearer\s+|(?:api[_-]?key|token|password)\s*[:=]\s*)\S+", "[已隐藏]", label)[:100]
         label = re.sub(r"https?://\S+|sk-[A-Za-z0-9_-]{8,}", "[已隐藏]", label)
-        items.append({"id":row["id"],"kind":"error" if row["source"] == "receipt" else "tool",
+        items.append({"id":row["id"],"kind":"error" if row["tool"] == "_chat_error_receipt" else "tool",
                       "label":label,"status":row["status"],"duration_ms":row["duration_ms"],
-                      "at":row["created_at"],"error":(row["error"] if row["source"] == "receipt" else error["message"]) if error else ""})
+                      "at":row["created_at"],"error":(row["error"] if row["tool"] == "_chat_error_receipt" else error["message"]) if error else ""})
     return jsonify({"items":items,"has_more":len(rows)>100})
 
 
@@ -2874,7 +2874,7 @@ def get_messages(session_id):
     receipt_groups = {}
     if rows:
         for receipt in db.execute(
-            "SELECT message_id,run_id,count(*) AS n,sum(CASE WHEN source='receipt' THEN 1 ELSE 0 END) AS errors FROM tool_calls WHERE session_id=? AND message_id>=? AND message_id<=? GROUP BY message_id,run_id",
+            "SELECT message_id,run_id,count(*) AS n,sum(CASE WHEN tool='_chat_error_receipt' THEN 1 ELSE 0 END) AS errors FROM tool_calls WHERE session_id=? AND message_id>=? AND message_id<=? GROUP BY message_id,run_id",
             (session_id, min(ids), max(ids))):
             receipt_groups.setdefault(receipt["message_id"], []).append((receipt["run_id"], receipt["n"], receipt["errors"]))
     usage_by_message = {}
@@ -4134,6 +4134,15 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
                         "tool": payload["tool"], "narrate": payload["narrate"]})
         elif kind == "tool_result":
             if payload.get("hidden"):
+                # Display-only receipt: never replay voice arguments/results to the model.
+                with sqlite3.connect(DB_PATH) as receipt_db:
+                    receipt_db.execute(
+                        "INSERT INTO tool_calls (session_id,message_id,run_id,tool,narrate,args,result,source,server,status,duration_ms,error,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (session_id, msg_id or user_msg_id or vision_source_msg_id, tool_run_id,
+                         "_chat_action_receipt", payload.get("narrate") or "语音调用", "{}", "",
+                         "receipt", "", "success" if payload.get("ok", True) else "error",
+                         payload.get("duration_ms", 0), "" if payload.get("ok", True) else "语音调用未完成，请检查语音配置或稍后重试。", _now()),
+                    )
                 if payload.get("ok") and payload.get("artifact_id"):
                     voice_artifact_id = int(payload["artifact_id"])
                     voice_visible_text = str(payload.get("visible_text") or "")
@@ -4325,6 +4334,8 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     )
     error_receipt = (_record_chat_error(conn, session_id, msg_id, tool_run_id, partial_error.get("message"), partial_error.get("status"))
                      if partial_error else None)
+    conn.execute("UPDATE tool_calls SET message_id=? WHERE session_id=? AND run_id=? AND tool='_chat_action_receipt'",
+                 (msg_id, session_id, tool_run_id))
     receipt_count = conn.execute("SELECT count(*) FROM tool_calls WHERE session_id=? AND message_id=? AND run_id=?",
                                  (session_id, msg_id, tool_run_id)).fetchone()[0]
     push_event = None

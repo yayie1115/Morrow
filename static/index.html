@@ -4811,7 +4811,7 @@
 
 <script src="/static/ui-preferences.js?v=2"></script>
 <script src="/static/chat-viewport.js?v=9"></script>
-<script src="/static/chat-voice.js?v=4"></script>
+<script src="/static/chat-voice.js?v=5"></script>
 <script src="/static/chat-parts.js?v=1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
@@ -6007,7 +6007,10 @@ function showEmpty(){
 let historyHasMore=false,historyBefore=null,historySession=null,loadingEarlier=false;
 const CHAT_RENDER_PAGE=80;
 function renderChatReceiptItems(details,items){
-  const body=details.querySelector(".chat-receipt-body");body.replaceChildren();
+  details._items=items;
+  if(!details.open){details._renderPending=true;return;}
+  details._renderPending=false;
+  const body=details.querySelector(".chat-receipt-body"),fragment=document.createDocumentFragment();
   for(const item of items){
     const row=document.createElement("div");row.className="chat-receipt-item";
     const line=document.createElement("div"),status=item.status==="error"?"失败":item.status==="running"?"进行中":"完成";
@@ -6015,13 +6018,16 @@ function renderChatReceiptItems(details,items){
     row.appendChild(line);
     if(item.error){const text=document.createElement("div");text.className="chat-receipt-error";text.textContent=item.error;row.appendChild(text);}
     if(item.at){const time=document.createElement("small");time.textContent=String(item.at).replace("T"," ");row.appendChild(time);}
-    body.appendChild(row);
+    fragment.appendChild(row);
   }
+  body.replaceChildren(fragment);
   if(!items.length)body.textContent="这个版本暂时没有可展示的调用记录。";
 }
 async function loadChatReceipt(wrap,details){
   if(!wrap._id||details._loading)return;
-  details._loading=true;const messageId=wrap._id,version=wrap._vi;
+  details._loading=true;
+  if(!details._items?.length)details.querySelector(".chat-receipt-body").textContent="正在读取回执…";
+  const messageId=wrap._id,version=wrap._vi;
   try{
     const response=await api("/api/chat/message/"+messageId+"/receipts?session_id="+encodeURIComponent(details._session));
     if(!response.ok)throw new Error();const data=await response.json();
@@ -6038,7 +6044,10 @@ function ensureChatReceipt(wrap,count=0){
     const summary=document.createElement("summary");summary.textContent=count?"行动 / 回执 · "+count:"行动 / 回执";
     const body=document.createElement("div");body.className="chat-receipt-body";
     details.append(summary,body);wrap.appendChild(details);
-    details.addEventListener("toggle",()=>{if(details.open&&!details._loaded&&wrap._id)void loadChatReceipt(wrap,details);});
+    details.addEventListener("toggle",()=>{
+      if(details.open&&details._renderPending)renderChatReceiptItems(details,details._items||[]);
+      if(details.open&&!details._loaded&&wrap._id)void loadChatReceipt(wrap,details);
+    });
   }
   return details;
 }
@@ -6348,7 +6357,7 @@ $("#voiceJson").onclick=async()=>{if(!currentVoiceArtifact)return;const box=$("#
   if(box.classList.contains("open")){hideVoiceJson();return;}
   if(!box.textContent){const r=await api("/api/artifacts/"+currentVoiceArtifact.id),data=await r.json();
     const read=document.createElement("div");read.className="voice-letter-read";read.innerHTML='<div class="voice-letter-read-title">the whole letter</div><div class="voice-letter-read-text"></div><details class="voice-letter-debug"><summary>INPUT / OUTPUT</summary><pre></pre></details>';
-    read.querySelector(".voice-letter-read-text").textContent=data.text||"";const translations=data.meta?.subtitle_zh;if(Array.isArray(translations)&&translations.length&&translations.every(line=>typeof line==="string"&&line.trim())){const translated=document.createElement("div");translated.className="chat-voice-translation";translated.textContent="中文翻译\n"+translations.join("\n");read.querySelector(".voice-letter-read-text").after(translated);}read.querySelector("pre").textContent=JSON.stringify({input:data.source||{},output:data.output||{},generation:data.meta||{}},null,2);const details=read.querySelector("details"),summary=details.querySelector("summary");summary.onclick=e=>{e.preventDefault();tidySmoothDetails(details,!details.open,280);};box.appendChild(read);}
+    read.querySelector(".voice-letter-read-text").textContent=data.text||"";const translations=data.meta?.subtitle_zh;if(Array.isArray(translations)&&translations.length&&translations.every(line=>typeof line==="string"&&line.trim())){const translated=document.createElement("div");translated.className="chat-voice-translation";translated.textContent=translations.join("\n");read.querySelector(".voice-letter-read-text").after(translated);}read.querySelector("pre").textContent=JSON.stringify({input:data.source||{},output:data.output||{},generation:data.meta||{}},null,2);const details=read.querySelector("details"),summary=details.querySelector("summary");summary.onclick=e=>{e.preventDefault();tidySmoothDetails(details,!details.open,280);};box.appendChild(read);}
   box.hidden=false;requestAnimationFrame(()=>box.classList.add("open"));const route=currentAppRoute();if(route?.overlay==="voice")history.pushState({...route,level:route.level+1,overlay:"voice-json"},"");};
 $("#voiceViewer").onclick=e=>{if($("#voiceJsonBody").classList.contains("open")&&!e.target.closest("#voiceJsonBody,#voiceJson"))hideVoiceJson();};
 // 复制：手机用内网 http 打开时 navigator.clipboard 不可用（非安全上下文），

@@ -46,7 +46,7 @@ const window={},document={createElement:t=>new Node(t),addEventListener(){},getE
 vm.runInNewContext(fs.readFileSync('static/chat-voice.js','utf8'),{window,document,Audio,console,setTimeout,clearTimeout});
 const artifact={id:1,audio_url:'/synthetic.wav',text:'Synthetic text.',meta:{subtitle_zh:['合成译文。']}};
 const first=window.sakieChatVoice.make(artifact,{sentenceCount:1}),row=first.children[0],button=row.children[0],textButton=row.children[1],details=first.children[1];
-assert.equal(audios[0].preload,'none');assert.equal(textButton.textContent,'文字');assert.equal(details.hidden,true);assert.equal(details.children[1].textContent,'中文翻译\n合成译文。');
+assert.equal(audios[0].preload,'none');assert.equal(textButton.textContent,'文字');assert.equal(details.hidden,true);assert.equal(details.children[1].textContent,'合成译文。');
 textButton.onclick({stopPropagation(){}});assert.equal(details.hidden,false);assert.equal(textButton.textContent,'收起');assert.equal(textButton.attrs['aria-expanded'],'true');assert.equal(audios[0].paused,true);
 textButton.onclick({stopPropagation(){}});assert.equal(details.hidden,true);assert.equal(textButton.attrs['aria-expanded'],'false');
 button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,false);assert.equal(button.attrs['aria-pressed'],'true');
@@ -354,13 +354,37 @@ class VoiceLetterTest(unittest.TestCase):
         self.assertIn('"type": "done"', events)
         self.assertIn('"artifacts": [{', events)
         conn = sqlite3.connect(app.DB_PATH)
-        self.assertEqual(conn.execute("SELECT count(*) FROM tool_calls").fetchone()[0], 0)
+        self.assertEqual(conn.execute("SELECT count(*) FROM tool_calls").fetchone()[0], 1)
+        receipt = conn.execute("SELECT tool,source,args,result,message_id FROM tool_calls").fetchone()
+        self.assertEqual(receipt[:4], ("_chat_action_receipt", "receipt", "{}", ""))
+        self.assertEqual(receipt[4], conn.execute("SELECT id FROM messages WHERE role='assistant'").fetchone()[0])
+        versions = json.loads(conn.execute("SELECT versions FROM messages WHERE role='assistant'").fetchone()[0])
+        self.assertEqual(versions[-1]["tool_log"], [])
         message = conn.execute("SELECT content FROM messages WHERE role='assistant'").fetchone()
         artifact = conn.execute("SELECT message_id,status,meta FROM message_artifacts").fetchone()
         conn.close()
         self.assertEqual(message[0], "我要开始发语音了。你去听听。")
         self.assertEqual(artifact[1], "ready")
         self.assertEqual(json.loads(artifact[2])["text_offset"], len("我要开始发语音了。"))
+
+        # A failed hidden action and model error must both survive without a fake reply.
+        conn = sqlite3.connect(app.DB_PATH)
+        failed_sid = conn.execute("INSERT INTO sessions(title) VALUES ('synthetic failure')").lastrowid
+        uid = conn.execute("INSERT INTO messages(session_id,role,content) VALUES (?,'user','synthetic')", (failed_sid,)).lastrowid
+        conn.commit();conn.close()
+        def failed_stream(*_args, **_kwargs):
+            yield "tool_result", {"hidden": True, "ok": False, "tool": voice_engine.TOOL_NAME,
+                                  "narrate": "语音调用", "error": "private synthetic provider detail"}
+            yield "error", {"message": "timeout", "status": 504}
+        stream_chat.side_effect = failed_stream
+        list(app._stream_reply_impl(failed_sid, user_msg_id=uid))
+        conn = sqlite3.connect(app.DB_PATH)
+        rows = conn.execute("SELECT tool,message_id,error FROM tool_calls WHERE session_id=? ORDER BY id", (failed_sid,)).fetchall()
+        self.assertEqual([row[0] for row in rows], ["_chat_action_receipt", "_chat_error_receipt"])
+        self.assertTrue(all(row[1] == uid for row in rows))
+        self.assertNotIn("private synthetic", str(rows))
+        self.assertEqual(conn.execute("SELECT count(*) FROM messages WHERE session_id=? AND role='assistant'", (failed_sid,)).fetchone()[0], 0)
+        conn.close()
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@
     const original=document.createElement('div');original.className='chat-voice-original';original.textContent=artifact.text||'这条语音没有保存文字稿。';transcript.appendChild(original);
     const rawTranslations=artifact.meta?.subtitle_zh;
     const translations=Array.isArray(rawTranslations)&&rawTranslations.length>0&&rawTranslations.length<=80&&rawTranslations.every(x=>typeof x==='string'&&x.trim()&&x.length<=500)&&/[\u3400-\u9fff]/u.test(rawTranslations.join(''))?rawTranslations:[];
-    if(translations.length){const translation=document.createElement('div');translation.className='chat-voice-translation';translation.textContent='中文翻译\n'+translations.join('\n');transcript.appendChild(translation);}
+    if(translations.length){const translation=document.createElement('div');translation.className='chat-voice-translation';translation.textContent=translations.join('\n');transcript.appendChild(translation);}
     textButton.onclick=event=>{event.stopPropagation();transcript.hidden=!transcript.hidden;textButton.textContent=transcript.hidden?'文字':'收起';textButton.setAttribute('aria-expanded',String(!transcript.hidden));};
     root.appendChild(transcript);root.appendChild(audio);
     for(const type of ['pointerdown','touchstart','click'])root.addEventListener(type,e=>e.stopPropagation());
