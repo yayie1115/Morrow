@@ -3141,24 +3141,13 @@
         </div>
         <div class="todo-list" id="todoDoneList" style="display:none"></div>
       </div>
-      <svg class="postcard-symbols" aria-hidden="true" width="0" height="0"><defs>
-        <symbol id="postcard-light" viewBox="0 0 64 64"><path d="M11 13h25v31H11zM15 17h17v23H15zM23.5 17v23M15 28h17M9 48h46"/><path class="postcard-wash" d="M38 36h15l-3-9h-9z"/><path d="M38 36h15l-3-9h-9zM45.5 36v12M41 48h9M19 54h27"/></symbol>
-        <symbol id="postcard-leaf" viewBox="0 0 64 64"><path class="postcard-wash" d="M29 43C14 33 22 17 46 13c2 20-2 32-17 30z"/><path d="M29 43C14 33 22 17 46 13c2 20-2 32-17 30zM19 53l23-33M28 40l-3-10M33 33l10-2M38 26l-2-7M16 55h25"/></symbol>
-        <symbol id="postcard-tomorrow" viewBox="0 0 64 64"><path class="postcard-wash" d="M12 24h40v27H12z"/><path d="M12 24h40v27H12zM12 24l20 16 20-16M12 51l14-15M52 51L38 36M22 23v-9h22v9M28 19h10M18 56h28"/></symbol>
-      </defs></svg>
-      <div class="horizon-card" id="homePostcard" data-design="tomorrow" hidden>
-        <div class="horizon-stamp" aria-hidden="true"><svg class="postcard-art" viewBox="0 0 64 64"><use href="#postcard-tomorrow"/></svg></div>
-        <div class="horizon-header">
-          <span class="horizon-title">a little tomorrow</span>
-          <span class="horizon-distance">Tomorrow</span>
-        </div>
-          <div class="horizon-quote">明天，也留一点时间给我们。</div>
-      </div>
+      <button class="glass-card" id="treasuryEntry" type="button" style="width:100%;display:flex;align-items:center;gap:14px;padding:18px 20px;margin-top:18px;text-align:left;color:var(--text-primary)"><span style="font-size:25px;color:var(--accent-strong)">¥</span><span style="flex:1"><strong style="font-size:15px">小金库</strong><small style="display:block;margin-top:4px;color:var(--text-secondary)">工资、赏金与消费申请</small></span><span aria-hidden="true">›</span></button>
       <div class="unread-hint" id="unreadHint" style="display:none">
         <span>💬</span><span id="unreadText"></span>
       </div>
     </section>
 
+    <section class="view" id="view-treasury" style="padding:0;bottom:calc(var(--nav-h) + 24px);padding-top:env(safe-area-inset-top)"><iframe id="treasuryFrame" title="小金库" style="border:0;width:100%;height:100%;display:block"></iframe></section>
     <!-- Cycle -->
     <section class="view" id="view-cycle">
       <div class="cycle-shell">
@@ -3409,29 +3398,7 @@
           <button class="we-save-button" type="submit">保存问候语</button>
         </form>
       </section>
-      <section class="mem-persona" id="wePostcard">
-        <div class="mem-persona-toggle">主页明信片</div>
-        <form id="postcardForm" class="mem-persona-panel">
-          <label class="postcard-visible"><input type="checkbox" id="postcardEnabled" checked>在主页显示</label>
-          <div class="postcard-options" role="group" aria-label="明信片样式">
-            <label class="postcard-choice"><input type="radio" name="postcardDesign" value="light"><svg class="postcard-art" viewBox="0 0 64 64" aria-hidden="true"><use href="#postcard-light"/></svg>留灯</label>
-            <label class="postcard-choice"><input type="radio" name="postcardDesign" value="leaf"><svg class="postcard-art" viewBox="0 0 64 64" aria-hidden="true"><use href="#postcard-leaf"/></svg>新叶</label>
-            <label class="postcard-choice"><input type="radio" name="postcardDesign" value="tomorrow" checked><svg class="postcard-art" viewBox="0 0 64 64" aria-hidden="true"><use href="#postcard-tomorrow"/></svg>明日</label>
-          </div>
-          <div class="greeting-help">选一张留在主页，不自动轮换。每款文案分别保存，留空使用默认；这只是装饰，不会作为提示词发送给 AI。</div>
-          <label data-postcard-quote="light" hidden>留灯的文案<input id="postcardQuoteLight" maxlength="200" placeholder="这一盏，留到你回来。"></label>
-          <label data-postcard-quote="leaf" hidden>新叶的文案<input id="postcardQuoteLeaf" maxlength="200" placeholder="不急，日子会慢慢长出来。"></label>
-          <label data-postcard-quote="tomorrow">明日的文案<input id="postcardQuoteTomorrow" maxlength="200" placeholder="明天，也留一点时间给我们。"></label>
-          <div class="horizon-card" id="postcardPreview" data-design="tomorrow" role="status" aria-live="polite">
-            <div class="horizon-stamp" aria-hidden="true"><svg class="postcard-art" viewBox="0 0 64 64"><use href="#postcard-tomorrow"/></svg></div>
-            <div class="horizon-header"><span class="horizon-title"></span><span class="horizon-distance"></span></div>
-            <div class="horizon-quote"></div>
-          </div>
-          <div id="postcardHiddenHint" class="greeting-help" hidden>保存后，主页将不显示明信片。</div>
-          <button type="button" class="mini-btn" id="postcardReset">恢复这款默认文案</button>
-          <button type="submit" class="we-save-button" disabled>保存明信片</button>
-        </form>
-      </section>
+
       </div>
       <div id="memoryNookPanel">
       <div class="mem-persona" id="memPersona">
@@ -4813,6 +4780,7 @@ function renderAssistantSettingsCopy(){
 }
 function renderIdentity(){
   renderAssistantSettingsCopy();
+  $("#treasuryFrame")?.contentWindow?.postMessage({type:"treasury-refresh"},location.origin);
   $(".login-welcome").textContent=hasUserName()?"Welcome home,\n"+userName()+".":"Welcome home";
   document.querySelectorAll('[data-identity-comment-author]').forEach(element=>{element.textContent=commentAuthorName(element.dataset.identityCommentAuthor);element.setAttribute('aria-label',element.textContent);});
   document.querySelectorAll('.boundary-closed-label').forEach(element=>element.textContent=assistantName()+"把前面的记录折进小本本了");
@@ -5196,56 +5164,7 @@ $("#greetingForm").onsubmit=async event=>{
     GREETING_PREFS=data;greetingsLoaded=true;renderGreetingForm();currentGreeting=rollGreeting();greetingSet=true;renderGreeting();toast("问候语已保存");
   }catch(error){toast(error.message||"问候语没有保存");}finally{button.disabled=false;}
 };
-const POSTCARDS={
-  light:{title:"a light for you",label:"Lamplight",quote:"这一盏，留到你回来。"},
-  leaf:{title:"a little growing",label:"New Leaf",quote:"不急，日子会慢慢长出来。"},
-  tomorrow:{title:"a little tomorrow",label:"Tomorrow",quote:"明天，也留一点时间给我们。"}
-};
-const POSTCARD_FIELDS={light:"#postcardQuoteLight",leaf:"#postcardQuoteLeaf",tomorrow:"#postcardQuoteTomorrow"};
-const defaultPostcardPrefs=()=>({enabled:true,design:"tomorrow",quotes:{light:"",leaf:"",tomorrow:""}});
-let POSTCARD_PREFS=defaultPostcardPrefs(),postcardLoaded=false;
-function renderPostcard(card,prefs){
-  const design=Object.hasOwn(POSTCARDS,prefs.design)?prefs.design:"tomorrow",preset=POSTCARDS[design];
-  card.dataset.design=design;
-  card.querySelector(".horizon-title").textContent=preset.title;
-  card.querySelector(".horizon-distance").textContent=preset.label;
-  card.querySelector(".horizon-quote").textContent=prefs.quotes[design]||preset.quote;
-  card.querySelector("use").setAttribute("href","#postcard-"+design);
-}
-function readPostcardForm(){
-  return {enabled:$("#postcardEnabled").checked,design:$('#postcardForm input[name="postcardDesign"]:checked').value,
-    quotes:Object.fromEntries(Object.entries(POSTCARD_FIELDS).map(([key,selector])=>[key,$(selector).value.trim()]))};
-}
-function previewPostcard(){
-  const prefs=readPostcardForm();renderPostcard($("#postcardPreview"),prefs);
-  document.querySelectorAll("[data-postcard-quote]").forEach(label=>label.hidden=label.dataset.postcardQuote!==prefs.design);
-  $("#postcardHiddenHint").hidden=prefs.enabled;
-}
-function renderPostcardForm(){
-  $("#postcardEnabled").checked=POSTCARD_PREFS.enabled;
-  document.querySelectorAll('#postcardForm input[name="postcardDesign"]').forEach(input=>input.checked=input.value===POSTCARD_PREFS.design);
-  Object.entries(POSTCARD_FIELDS).forEach(([key,selector])=>$(selector).value=POSTCARD_PREFS.quotes[key]);
-  previewPostcard();
-}
-function renderHomePostcard(){
-  renderPostcard($("#homePostcard"),POSTCARD_PREFS);$("#homePostcard").hidden=!POSTCARD_PREFS.enabled;
-}
-async function loadPostcardSettings(){
-  if(postcardLoaded)return;
-  try{const r=await api("/api/home-postcard");if(!r.ok)throw new Error();POSTCARD_PREFS=await r.json();postcardLoaded=true;
-    renderHomePostcard();renderPostcardForm();$('#postcardForm [type="submit"]').disabled=false;
-  }catch{toast("明信片设置暂时没有读到，请重新打开主页后再试");}
-}
-$("#postcardForm").oninput=previewPostcard;
-$("#postcardReset").onclick=()=>{$(POSTCARD_FIELDS[readPostcardForm().design]).value="";previewPostcard();toast("已恢复这款默认文案，保存后生效");};
-$("#postcardForm").onsubmit=async event=>{
-  event.preventDefault();if(!postcardLoaded)return;
-  const button=event.target.querySelector('[type="submit"]');button.disabled=true;
-  try{const r=await api("/api/home-postcard",{method:"PUT",body:JSON.stringify(readPostcardForm())}),data=await r.json();
-    if(!r.ok)throw new Error(data.error||"明信片没有保存");
-    POSTCARD_PREFS=data;renderHomePostcard();renderPostcardForm();toast("明信片已保存");
-  }catch(error){toast(error.message||"明信片没有保存");}finally{button.disabled=false;}
-};
+$("#treasuryEntry").onclick=()=>{const frame=$("#treasuryFrame");if(!frame.src)frame.src="/static/treasury.html";navigateMain("treasury");frame.contentWindow?.postMessage({type:"treasury-refresh"},location.origin);};
 let homeWeatherText="天气加载中…";
 let TOGETHER_DATE="",togetherLoaded=false;
 function calendarDate(now=new Date()){return now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0");}
@@ -5330,7 +5249,7 @@ function tickClock(){
 setInterval(()=>{if($("#view-home").classList.contains("active"))tickClock();},1000);
 async function loadHome(){
   tickClock();
-  await Promise.all([loadGreetingSettings(),loadTogetherDate(),loadPostcardSettings()]);
+  await Promise.all([loadGreetingSettings(),loadTogetherDate()]);
   $("#assistantStatus").textContent=assistantName()+"在想你";
   const noteTask=(async()=>{const n=await(await api("/api/notes")).json();homeDisplayedNoteId=n.id??null;homeNoteFixed=!!n.fixed;$("#noteText").textContent=n.content||"（还没有便签）";})();
   await Promise.allSettled([loadVisit(),loadCycleHomeStatus(),loadDiaryHomeStatus(),noteTask,loadWeather(),loadTodos()]);

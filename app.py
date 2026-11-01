@@ -4683,6 +4683,22 @@ def together_date_settings():
         return jsonify({"error": str(error)}), 400
 
 
+@app.route("/api/treasury", methods=["GET", "POST"])
+@require_auth
+def treasury_api():
+    import treasury
+    if request.method == "GET":
+        return jsonify(treasury.public(treasury.read(get_db())))
+    if not request.is_json:
+        return jsonify({"error": "请使用账本页面提交"}), 415
+    if request.headers.get("Sec-Fetch-Site") == "cross-site":
+        return jsonify({"error": "不允许跨站提交"}), 403
+    try:
+        return jsonify(treasury.mutate(get_db(), request.get_json(silent=True)))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+
+
 @app.route("/api/home-postcard", methods=["GET", "PUT"])
 @require_auth
 def home_postcard_settings():

@@ -115,9 +115,8 @@ assert.equal(removed,2);assert.equal(cancelled,2);
         self.assertIn('box-shadow:inset 14px 0 19px -17px rgba(0,0,0,.78)', self.page)
         self.assertIn('<div class="study-door-slip">', self.page)
         self.assertIn('.study-note-stamp.sealed svg{animation:studyPawSeal', self.page)
-        self.assertIn('class="horizon-stamp" aria-hidden="true"><svg class="postcard-art"', self.page)
-        for design in ('light', 'leaf', 'tomorrow'):
-            self.assertEqual(self.page.count('id="postcard-'+design+'"'), 1)
+        self.assertNotIn('id="homePostcard"', self.page)
+        self.assertIn('id="treasuryEntry"', self.page)
 
     def test_footprint_keeps_original_room_style_with_plain_monologues(self):
         self.assertIn('.study-monologue-event{padding:13px 15px 14px 18px;', self.page)
