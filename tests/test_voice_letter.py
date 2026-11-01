@@ -45,16 +45,18 @@ const audios=[];class Audio extends Node{
 const window={},document={createElement:t=>new Node(t),addEventListener(){},getElementById:()=>null};
 vm.runInNewContext(fs.readFileSync('static/chat-voice.js','utf8'),{window,document,Audio,console,setTimeout,clearTimeout});
 const artifact={id:1,audio_url:'/synthetic.wav',text:'Synthetic text.',meta:{subtitle_zh:['合成译文。']}};
-const first=window.sakieChatVoice.make(artifact,{sentenceCount:1}),button=first.children[0],details=first.children[1];
-assert.equal(audios[0].preload,'none');assert.equal(details.children[0].textContent,'查看文字');assert.equal(details.children[2].textContent,'中文翻译\n合成译文。');
+const first=window.sakieChatVoice.make(artifact,{sentenceCount:1}),row=first.children[0],button=row.children[0],textButton=row.children[1],details=first.children[1];
+assert.equal(audios[0].preload,'none');assert.equal(textButton.textContent,'文字');assert.equal(details.hidden,true);assert.equal(details.children[1].textContent,'中文翻译\n合成译文。');
+textButton.onclick({stopPropagation(){}});assert.equal(details.hidden,false);assert.equal(textButton.textContent,'收起');assert.equal(textButton.attrs['aria-expanded'],'true');assert.equal(audios[0].paused,true);
+textButton.onclick({stopPropagation(){}});assert.equal(details.hidden,true);assert.equal(textButton.attrs['aria-expanded'],'false');
 button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,false);assert.equal(button.attrs['aria-pressed'],'true');
-audios[0].fire('loadedmetadata');assert.equal(button.children[2].textContent,'0:12');
+audios[0].fire('loadedmetadata');assert.equal(button.children[1].textContent,'13″');
 button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);
-const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});button.onclick({stopPropagation(){}});second.children[0].onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);assert.equal(audios[1].paused,false);
+const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});button.onclick({stopPropagation(){}});second.children[0].children[0].onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);assert.equal(audios[1].paused,false);
 window.sakieChatVoice.stop();assert.equal(audios[1].paused,true);
-const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,2);
-const grouped=window.sakieChatVoice.make({...artifact,id:5,meta:{subtitle_zh:['第一段译文。','第二段译文。']}},{sentenceCount:1});assert.equal(grouped.children[1].children.length,3);assert.ok(grouped.children[1].children[2].textContent.includes('第二段译文'));
-const plain=window.sakieChatVoice.make({...artifact,id:4,text:'<script>synthetic</script>',meta:{}},{sentenceCount:1});assert.equal(plain.children[1].children[1].textContent,'<script>synthetic</script>');
+const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,1);
+const grouped=window.sakieChatVoice.make({...artifact,id:5,meta:{subtitle_zh:['第一段译文。','第二段译文。']}},{sentenceCount:1});assert.equal(grouped.children[1].children.length,2);assert.ok(grouped.children[1].children[1].textContent.includes('第二段译文'));
+const plain=window.sakieChatVoice.make({...artifact,id:4,text:'<script>synthetic</script>',meta:{}},{sentenceCount:1});assert.equal(plain.children[1].children[0].textContent,'<script>synthetic</script>');
 """
         subprocess.run([shutil.which('node'),'-e',script],check=True)
 
