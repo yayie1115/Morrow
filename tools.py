@@ -2251,7 +2251,18 @@ def openai_tools(mcp_server_ids=None):
     return out
 
 
+def _treasury_narration(name):
+    suffix = {"read_treasury": "正在翻看小金库", "request_treasury_expense": "正在递交消费申请"}.get(name)
+    if suffix is None:
+        return None
+    import identity
+    return identity.get_identity(db_path=DB_PATH)["assistant_name"] + suffix
+
+
 def narrate(name):
+    treasury_text = _treasury_narration(name)
+    if treasury_text is not None:
+        return treasury_text
     if name.startswith("mcp_"):
         server, _tool = _find_mcp_tool(name)
         if server:

@@ -44,3 +44,12 @@ class TreasuryToolsTest(unittest.TestCase):
             r=tools.execute('request_treasury_expense',{'item':'合成物品','cents':10,'action':'decide'},1);self.assertFalse(r['ok'])
         for name in ['read_treasury','request_treasury_expense']:
             self.assertIn(name,tools._REGISTRY);self.assertFalse(tools._REGISTRY[name][2]['parameters']['additionalProperties'])
+    def test_narration_tracks_saved_identity_without_claiming_success(self):
+        import identity
+        with patch.object(tools,'DB_PATH',self.path):
+            identity.save_identity(self.db,{'assistant_name':'测试助手甲'})
+            self.assertEqual(tools.narrate('read_treasury'),'测试助手甲正在翻看小金库')
+            self.assertEqual(tools.narrate('request_treasury_expense'),'测试助手甲正在递交消费申请')
+            identity.save_identity(self.db,{'assistant_name':'测试助手乙'})
+            self.assertEqual(tools.narrate('read_treasury'),'测试助手乙正在翻看小金库')
+            self.assertIsNone(tools._treasury_narration('read_note'))
