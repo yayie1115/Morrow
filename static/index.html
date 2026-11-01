@@ -199,12 +199,9 @@
       -webkit-overflow-scrolling:touch;padding:16px 16px calc(var(--nav-h) + 36px);display:none;animation:viewIn .2s var(--ease);}
     .view.active{display:block;}
     #view-home{animation:none;}
-    .treasury-passbook{position:relative;isolation:isolate;display:flex;align-items:center;gap:18px;width:100%;min-height:130px;margin:22px 0 8px;padding:23px 24px 23px 32px;overflow:hidden;border:0;outline:0;border-radius:6px 19px 19px 6px;background:linear-gradient(115deg,var(--surface-raised),var(--surface));color:var(--text-primary);text-align:left;box-shadow:0 7px 18px var(--shadow);-webkit-tap-highlight-color:transparent;}
-    .treasury-passbook:focus-visible{outline:2px solid var(--accent-strong);outline-offset:4px;}
-    .treasury-binding{position:absolute;inset:0 auto 0 0;width:11px;background:var(--accent);opacity:.6;box-shadow:3px 0 0 color-mix(in srgb,var(--accent) 13%,transparent);}
-    .treasury-copy{display:grid;gap:7px;flex:1;min-width:0;}.treasury-copy small{font:9px/1.3 monospace;letter-spacing:.13em;color:var(--text-secondary);}.treasury-copy strong{font-size:20px;font-weight:550;letter-spacing:.12em;}.treasury-copy>span{font-size:11px;line-height:1.6;color:var(--text-secondary);}
-    .treasury-seal{display:grid;justify-items:center;gap:5px;flex:none;color:var(--accent-strong);transform:rotate(-7deg);}.treasury-seal svg{width:43px;height:43px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round;}.treasury-seal>span{font:8px/1.3 monospace;letter-spacing:.12em;}
-
+    .treasury-passbook{display:flex;align-items:center;gap:12px;width:100%;min-height:68px;margin:14px 0 6px;padding:12px 16px;border:0;border-radius:15px;background:var(--surface-raised);color:var(--text-primary);text-align:left;box-shadow:0 3px 12px var(--shadow);-webkit-tap-highlight-color:transparent;}
+    .treasury-passbook:focus-visible{outline:2px solid var(--accent-strong);outline-offset:3px;}
+    .treasury-mark{font:24px/1 Georgia,serif;color:var(--accent-strong);padding:0 4px;}.treasury-copy{display:grid;gap:4px;flex:1;min-width:0;}.treasury-copy strong{font-size:14px;font-weight:550;}.treasury-copy>span{font-size:12px;color:var(--text-secondary);font-variant-numeric:tabular-nums;}.treasury-pending{font-size:11px;color:var(--accent-strong);}.treasury-arrow{font-size:20px;color:var(--text-secondary);}
     @keyframes viewIn{from{opacity:0;}to{opacity:1;}}
     .page-title{font-size:22px;font-weight:600;letter-spacing:-0.01em;margin:8px 4px 16px;}
     .section-title{font-size:17px;font-weight:600;margin:18px 4px 10px;display:flex;
@@ -3147,7 +3144,7 @@
         </div>
         <div class="todo-list" id="todoDoneList" style="display:none"></div>
       </div>
-      <button class="treasury-passbook" id="treasuryEntry" type="button" aria-label="打开小金库"><span class="treasury-binding" aria-hidden="true"></span><span class="treasury-copy"><small>OUR LITTLE RESERVE</small><strong>小金库</strong><span>把偏爱，一笔一笔存起来。</span></span><span class="treasury-seal" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M12 15h23v23H12zM12 15l17-5v5M12 22h23M29 25h9v9h-9z"/><circle cx="33" cy="29.5" r=".7"/></svg><span>OPEN ↗</span></span></button>
+      <button class="treasury-passbook" id="treasuryEntry" type="button" aria-label="打开小金库"><span class="treasury-mark" aria-hidden="true">¥</span><span class="treasury-copy"><strong>小金库</strong><span id="treasuryHomeBalance">余额 —</span></span><span class="treasury-pending" id="treasuryHomePending" hidden></span><span class="treasury-arrow" aria-hidden="true">›</span></button>
       <div class="unread-hint" id="unreadHint" style="display:none">
         <span>💬</span><span id="unreadText"></span>
       </div>
@@ -5170,6 +5167,18 @@ $("#greetingForm").onsubmit=async event=>{
     GREETING_PREFS=data;greetingsLoaded=true;renderGreetingForm();currentGreeting=rollGreeting();greetingSet=true;renderGreeting();toast("问候语已保存");
   }catch(error){toast(error.message||"问候语没有保存");}finally{button.disabled=false;}
 };
+let treasurySummaryLoading=false;
+async function loadTreasurySummary(){
+  if(treasurySummaryLoading)return;
+  treasurySummaryLoading=true;
+  try{
+    const r=await api("/api/treasury");if(!r.ok)throw new Error();const state=await r.json();
+    const cents=state.transactions.reduce((sum,t)=>sum+t.cents,0),pending=state.requests.filter(q=>q.status==="pending").length;
+    $("#treasuryHomeBalance").textContent="余额 ¥"+(cents/100).toFixed(2);
+    $("#treasuryHomePending").textContent=pending+" 份待审批";$("#treasuryHomePending").hidden=pending===0;
+  }catch{$("#treasuryHomeBalance").textContent="余额暂未读取";$("#treasuryHomePending").hidden=true;}
+  finally{treasurySummaryLoading=false;}
+}
 $("#treasuryEntry").onclick=()=>{const frame=$("#treasuryFrame");if(!frame.src)frame.src="/static/treasury.html";navigateMain("treasury");frame.contentWindow?.postMessage({type:"treasury-refresh"},location.origin);};
 let homeWeatherText="天气加载中…";
 let TOGETHER_DATE="",togetherLoaded=false;
@@ -5255,6 +5264,7 @@ function tickClock(){
 setInterval(()=>{if($("#view-home").classList.contains("active"))tickClock();},1000);
 async function loadHome(){
   tickClock();
+  void loadTreasurySummary();
   await Promise.all([loadGreetingSettings(),loadTogetherDate()]);
   $("#assistantStatus").textContent=assistantName()+"在想你";
   const noteTask=(async()=>{const n=await(await api("/api/notes")).json();homeDisplayedNoteId=n.id??null;homeNoteFixed=!!n.fixed;$("#noteText").textContent=n.content||"（还没有便签）";})();

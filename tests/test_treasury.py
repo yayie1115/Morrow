@@ -31,3 +31,12 @@ class TreasuryTest(unittest.TestCase):
             with c.session_transaction() as s:s['authed']=True
             self.assertEqual(c.get('/api/treasury').json['revision'],0)
             self.assertEqual(c.post('/api/treasury',json=dict(operation_id='one',revision=0,action='salary')).status_code,200)
+    def test_home_summary_uses_real_cents_and_hides_zero_pending(self):
+        import shutil,subprocess,json
+        from pathlib import Path
+        node=shutil.which('node')
+        if not node:self.skipTest('Node unavailable')
+        page=Path('static/index.html').read_text(encoding='utf-8')
+        code=page[page.index('let treasurySummaryLoading=false;'):page.index('$("#treasuryEntry").onclick=')]
+        script="const assert=require('assert');const nodes={};const $=k=>nodes[k]??={};let state={transactions:[{cents:100},{cents:-25}],requests:[]};let ok=true;const api=async()=>({ok,json:async()=>state});"+code+";(async()=>{await loadTreasurySummary();assert.equal($('#treasuryHomeBalance').textContent,'余额 ¥0.75');assert.equal($('#treasuryHomePending').hidden,true);state.requests=[{status:'pending'}];await loadTreasurySummary();assert.equal($('#treasuryHomePending').textContent,'1 份待审批');assert.equal($('#treasuryHomePending').hidden,false);ok=false;await loadTreasurySummary();assert.equal($('#treasuryHomeBalance').textContent,'余额暂未读取');assert.equal($('#treasuryHomePending').hidden,true);})().catch(e=>{console.error(e);process.exitCode=1});"
+        subprocess.run([node,'-e',script],check=True)
