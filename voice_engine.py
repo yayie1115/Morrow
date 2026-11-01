@@ -21,7 +21,7 @@ TOOL_DEFINITION = {
             "[laughs] [sighs] [slows down]，也可使用简短、明确、可听见的自然英文短语。写的是声音，"
             "只写她能听到的东西。它和其他工具一样，可以在调用前后继续说普通文字；文字用于自然衔接，"
             "声音信里说过的不用再重复。纯中文朗读的 subtitle_zh 可传空数组。非中文或中外文混合朗读时，"
-            "传 subtitle_zh：按实际朗读句逐句提供自然中文字幕，一条朗读句对应数组中的一条中文；"
+            "传 subtitle_zh：按完整句、自然意群或整段提供准确的中文翻译；可用一条完整译文覆盖整段，不按标点数量强制对齐。省略号、破折号和停顿不需要拆成半句字幕；"
             "其中原本为中文的句子保留原意。英文音频标签只是声音控制标记，不要求正文使用英文。实际声音严格按 script 朗读，不会自动翻译；不得把英文原稿声称为中文语音。"
         ),
         "parameters": {
@@ -30,7 +30,7 @@ TOOL_DEFINITION = {
                 "script": {"type": "string", "description": "带少量内联音频标签的完整朗读稿，语言由 AI 根据情境选择"},
                 "subtitle_zh": {
                     "type": "array",
-                    "description": "非中文或混合语言朗读时逐句对应的自然中文字幕；纯中文可传空数组",
+                    "description": "非中文或混合语言朗读的中文翻译，可按意群或整段提供，不要求与标点分句数相同；纯中文可传空数组",
                     "items": {"type": "string"},
                     "maxItems": 80,
                 },
@@ -151,12 +151,12 @@ def sentence_timings_from_alignment(script, alignment):
 
 
 def clean_subtitles(raw, text):
-    if not isinstance(raw, list):
+    """Preserve translated paragraphs independently of punctuation-based timing."""
+    if not isinstance(raw, list) or not raw or len(raw) > 80:
         return []
-    subtitles = [str(item or "").strip()[:500] for item in raw]
-    if not subtitles or any(not item for item in subtitles):
+    if any(not isinstance(item, str) or not item.strip() or len(item.strip()) > 500 for item in raw):
         return []
-    return subtitles if len(subtitles) == len(split_sentences(text)) else []
+    return [item.strip() for item in raw]
 
 
 def validated_subtitles(raw, text):
@@ -164,9 +164,9 @@ def validated_subtitles(raw, text):
     subtitles = clean_subtitles(raw, text)
     has_foreign_letters = any(unicodedata.category(char).startswith("L") and not ("\u3400" <= char <= "\u9fff") for char in text)
     if raw and not subtitles:
-        raise ValueError("中文字幕须与实际朗读句逐句对应，不能缺句或留空。")
+        raise ValueError("中文字幕须为非空文本数组，每段最多500字、最多80段。")
     if has_foreign_letters and (not subtitles or not any(re.search(r"[\u3400-\u9fff]", line) for line in subtitles)):
-        raise ValueError("非中文或混合语言语音必须提供逐句中文字幕；中文翻译不会改变实际朗读语言。")
+        raise ValueError("非中文或混合语言语音必须提供中文翻译；中文翻译不会改变实际朗读语言。")
     return subtitles
 
 

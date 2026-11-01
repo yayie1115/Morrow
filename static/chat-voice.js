@@ -15,7 +15,7 @@
     probe.onerror=done;probe.preload='metadata';probe.src=job.url;probe.load();
   }
   const observer=typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){observer.unobserve(entry.target);waiting.delete(entry.target);const job=entry.target._voiceProbe;if(job){probeQueue.push(job);pump();}}},{rootMargin:'0px'}):null;
-  function make(artifact,{notify=()=>{},sentenceCount=0}={}){
+  function make(artifact,{notify=()=>{}}={}){
     const root=document.createElement('div');root.className='ai-part chat-voice-message';root.dataset.artifactId=String(artifact.id);
     const play=document.createElement('button');play.type='button';play.className='chat-voice-play';play.setAttribute('aria-label','播放语音');play.setAttribute('aria-pressed','false');
     const icon=document.createElement('span');icon.className='chat-voice-icon';icon.textContent='▶';
@@ -45,7 +45,7 @@
     const summary=document.createElement('summary');summary.textContent='查看文字';transcript.appendChild(summary);
     const original=document.createElement('div');original.className='chat-voice-original';original.textContent=artifact.text||'这条语音没有保存文字稿。';transcript.appendChild(original);
     const rawTranslations=artifact.meta?.subtitle_zh;
-    const translations=Array.isArray(rawTranslations)&&rawTranslations.length===sentenceCount&&rawTranslations.every(x=>typeof x==='string'&&x.trim())?rawTranslations:[];
+    const translations=Array.isArray(rawTranslations)&&rawTranslations.length>0&&rawTranslations.length<=80&&rawTranslations.every(x=>typeof x==='string'&&x.trim()&&x.length<=500)&&/[\u3400-\u9fff]/u.test(rawTranslations.join(''))?rawTranslations:[];
     if(translations.length){const translation=document.createElement('div');translation.className='chat-voice-translation';translation.textContent='中文翻译\n'+translations.join('\n');transcript.appendChild(translation);}
     transcript.addEventListener('toggle',()=>{summary.textContent=transcript.open?'收起文字':'查看文字';});
     root.appendChild(transcript);

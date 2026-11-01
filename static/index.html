@@ -4806,7 +4806,7 @@
 
 <script src="/static/ui-preferences.js?v=2"></script>
 <script src="/static/chat-viewport.js?v=9"></script>
-<script src="/static/chat-voice.js?v=1"></script>
+<script src="/static/chat-voice.js?v=2"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -6284,7 +6284,7 @@ function setAIBody(wrap){
   const voice=activeVoiceArtifact(wrap);
   if(voice){const legacyReplace=voice.meta?.text_offset==null&&visible.trim()===(voice.text||"").trim();
     const source=legacyReplace?"":visible,offset=Math.max(0,Math.min(Number(voice.meta?.text_offset??source.length),source.length));
-    renderText(source.slice(0,offset));body.appendChild(window.sakieChatVoice.make(voice,{notify:toast,sentenceCount:splitVoiceSentences(voice.text).length}));renderText(source.slice(offset));}
+    renderText(source.slice(0,offset));body.appendChild(window.sakieChatVoice.make(voice,{notify:toast}));renderText(source.slice(offset));}
   else renderText(visible);
   renderStickers(body,wrap._attachmentVersions?.[wrap._vi]||[],true);
   const parts=[...body.querySelectorAll(".ai-part")];
@@ -6342,7 +6342,7 @@ $("#voiceJson").onclick=async()=>{if(!currentVoiceArtifact)return;const box=$("#
   if(box.classList.contains("open")){hideVoiceJson();return;}
   if(!box.textContent){const r=await api("/api/artifacts/"+currentVoiceArtifact.id),data=await r.json();
     const read=document.createElement("div");read.className="voice-letter-read";read.innerHTML='<div class="voice-letter-read-title">the whole letter</div><div class="voice-letter-read-text"></div><details class="voice-letter-debug"><summary>INPUT / OUTPUT</summary><pre></pre></details>';
-    read.querySelector(".voice-letter-read-text").textContent=data.text||"";read.querySelector("pre").textContent=JSON.stringify({input:data.source||{},output:data.output||{},generation:data.meta||{}},null,2);const details=read.querySelector("details"),summary=details.querySelector("summary");summary.onclick=e=>{e.preventDefault();tidySmoothDetails(details,!details.open,280);};box.appendChild(read);}
+    read.querySelector(".voice-letter-read-text").textContent=data.text||"";const translations=data.meta?.subtitle_zh;if(Array.isArray(translations)&&translations.length&&translations.every(line=>typeof line==="string"&&line.trim())){const translated=document.createElement("div");translated.className="chat-voice-translation";translated.textContent="中文翻译\n"+translations.join("\n");read.querySelector(".voice-letter-read-text").after(translated);}read.querySelector("pre").textContent=JSON.stringify({input:data.source||{},output:data.output||{},generation:data.meta||{}},null,2);const details=read.querySelector("details"),summary=details.querySelector("summary");summary.onclick=e=>{e.preventDefault();tidySmoothDetails(details,!details.open,280);};box.appendChild(read);}
   box.hidden=false;requestAnimationFrame(()=>box.classList.add("open"));const route=currentAppRoute();if(route?.overlay==="voice")history.pushState({...route,level:route.level+1,overlay:"voice-json"},"");};
 $("#voiceViewer").onclick=e=>{if($("#voiceJsonBody").classList.contains("open")&&!e.target.closest("#voiceJsonBody,#voiceJson"))hideVoiceJson();};
 // 复制：手机用内网 http 打开时 navigator.clipboard 不可用（非安全上下文），

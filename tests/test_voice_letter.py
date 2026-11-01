@@ -53,6 +53,7 @@ button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);
 const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});button.onclick({stopPropagation(){}});second.children[0].onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);assert.equal(audios[1].paused,false);
 window.sakieChatVoice.stop();assert.equal(audios[1].paused,true);
 const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,2);
+const grouped=window.sakieChatVoice.make({...artifact,id:5,meta:{subtitle_zh:['第一段译文。','第二段译文。']}},{sentenceCount:1});assert.equal(grouped.children[1].children.length,3);assert.ok(grouped.children[1].children[2].textContent.includes('第二段译文'));
 const plain=window.sakieChatVoice.make({...artifact,id:4,text:'<script>synthetic</script>',meta:{}},{sentenceCount:1});assert.equal(plain.children[1].children[1].textContent,'<script>synthetic</script>');
 """
         subprocess.run([shutil.which('node'),'-e',script],check=True)
@@ -100,7 +101,7 @@ class VoiceLetterTest(unittest.TestCase):
         english = "I missed you. — More than I wanted to admit."
         self.assertEqual(len(voice_engine.split_sentences(english)), 2)
         self.assertEqual(voice_engine.clean_subtitles(["我想你了。", "比我愿意承认的还要想。"], english)[0], "我想你了。")
-        self.assertEqual(voice_engine.clean_subtitles(["数量不对"], english), [])
+        self.assertEqual(voice_engine.clean_subtitles(["整段译文"], english), ["整段译文"])
 
     def test_alignment_becomes_sentence_timings_without_stage_tags(self):
         script = "[quietly] I missed you. [pause] Come here."
@@ -157,12 +158,32 @@ class VoiceLetterTest(unittest.TestCase):
                                                     os.listdir(os.path.join(app.UPLOAD_DIR, "voice_letters"))[0])))
 
     @mock.patch("app._generate_tts_audio")
+    def test_ellipsis_and_pauses_accept_natural_paragraph_translation(self, generate):
+        self.seed_config()
+        with sqlite3.connect(app.DB_PATH) as db:
+            sid=db.execute("INSERT INTO sessions(title) VALUES ('synthetic ellipsis')").lastrowid
+        script='[softly] Well... I just… wanted to say—hello. [pause] I missed you.'
+        translation=['嗯……我只是想跟你打个招呼。我想你了。']
+        self.assertGreater(len(voice_engine.split_sentences(voice_engine.parse_script(script)['text'])),1)
+        self.assertEqual(voice_engine.validated_subtitles(translation,voice_engine.parse_script(script)['text']),translation)
+        for invalid in [[''],[None],['译文'*251],['译文']*81]:
+            with self.assertRaises(ValueError):voice_engine.validated_subtitles(invalid,'Synthetic English.')
+        generate.return_value=(b'synthetic-audio','audio/mpeg',10,{})
+        result=app._voice_letter_executor(sid,'ellipsis-grouped')(voice_engine.TOOL_NAME,{'script':script,'subtitle_zh':translation},sid)
+        self.assertTrue(result['ok'])
+        self.assertEqual(generate.call_args[0][1],script)
+        with sqlite3.connect(app.DB_PATH) as db:
+            row=db.execute('SELECT source_payload,meta FROM message_artifacts WHERE id=?',(result['artifact_id'],)).fetchone()
+        self.assertEqual(json.loads(row[0])['script'],script)
+        self.assertEqual(json.loads(row[1])['subtitle_zh'],translation)
+
+    @mock.patch("app._generate_tts_audio")
     def test_foreign_voice_without_translation_is_rejected_before_spending(self, generate):
         self.seed_config()
         with sqlite3.connect(app.DB_PATH) as db:
             sid=db.execute("INSERT INTO sessions(title) VALUES ('synthetic')").lastrowid
         executor=app._voice_letter_executor(sid,'subtitle-validation')
-        for args in [{'script':'Synthetic English.','subtitle_zh':[]}, {'script':'Synthetic English.','subtitle_zh':['English again.']}, {'script':'Synthetic English.','subtitle_zh':['一。','二。']}]:
+        for args in [{'script':'Synthetic English.','subtitle_zh':[]}, {'script':'Synthetic English.','subtitle_zh':['English again.']}, {'script':'Synthetic English.','subtitle_zh':['中文。','']}]:
             outcome=executor(voice_engine.TOOL_NAME,args,sid)
             self.assertFalse(outcome['ok'])
             self.assertEqual(outcome['error'],'invalid voice subtitles')
