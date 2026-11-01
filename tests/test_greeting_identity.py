@@ -155,6 +155,9 @@ assert.deepEqual(GREETING_PREFS,defaultGreetingPrefs());
     @unittest.skipUnless(shutil.which('node'),'Node unavailable')
     def test_time_only_pool_boundaries_timezone_and_live_boundary(self):
         source=Path('static/index.html').read_text(encoding='utf-8')
+        self.assertIn('<label>深夜句<textarea id="greetingCommon"',source)
+        self.assertNotIn('通用句',source)
+        self.assertIn('随机模式不分时段',source)
         rules=source[source.index('const GREET='):source.index('async function loadVisit()')]
         script="const assert=require('assert');const $=()=>({});const greetingName=()=>'';"+rules+r"""
 const prefs={mode:'timed',morning:'MORNING',noon:'DAY',evening:'EVENING',common:'NIGHT'};
