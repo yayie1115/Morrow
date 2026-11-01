@@ -3389,7 +3389,7 @@
         </div>
         <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
         <input type="file" id="fileAlbum" accept="image/*" multiple hidden>
-        <input type="file" id="filePick" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden>
+        <input type="file" id="filePick" accept=".txt,.md,.markdown,.pdf,.docx,.xlsx,text/plain,text/markdown,application/pdf" hidden>
       </div>
     </section>
 
@@ -6852,7 +6852,7 @@ async function submitEdit(text){
   {
     const supported=a=>isAImsg(wrap)?a.isSticker:(a.isImg||a.isText||a.isSticker);
     const unsupported=attachments.filter(a=>!supported(a));
-    if(unsupported.length)toast("这里只能发图片、表情和 txt/md 文本");
+    if(unsupported.length)toast("这里只能发图片、表情和 txt/md/pdf/docx/xlsx");
     const kept=attachments.filter(a=>a.existing&&supported(a)).map(a=>a.saved);
     const freshItems=attachments.filter(a=>!a.existing&&supported(a));
     try{finalAttachments=kept.concat(await uploadAttachments(freshItems));}
@@ -6896,7 +6896,7 @@ async function send(){
   sending=true;setSendPreparing(true);
   try{
     if(editingMsg){await submitEdit(text);return;}   // edit mode: update the message, don't reply
-    if(attachments.some(a=>!a.isImg&&!a.isText&&!a.isSticker))toast("这里只能发图片、表情和 txt/md 文本");
+    if(attachments.some(a=>!a.isImg&&!a.isText&&!a.isSticker))toast("这里只能发图片、表情和 txt/md/pdf/docx/xlsx");
     let uploaded=[];
     if(sendable.length){
       try{uploaded=await uploadAttachments(sendable);}
@@ -8005,8 +8005,10 @@ function addAttachment(file){
   const lower=(file.name||"").toLowerCase();
   const isImg=file.type.startsWith("image/")||/\.(png|jpe?g|webp|gif)$/.test(lower);
   if(isImg&&attachments.filter(a=>a.isImg).length>=9)return false;
-  const item={file,name:file.name,isImg,
-    isText:/\.(txt|md|markdown)$/.test(lower)||file.type.startsWith("text/"),url:null};
+  const docLike=/\.(txt|md|markdown|pdf|docx|xlsx)$/.test(lower)
+    ||file.type.startsWith("text/")||file.type==="application/pdf"
+    ||/officedocument|ms-excel/.test(file.type);
+  const item={file,name:file.name,isImg,isText:docLike,url:null};
   if(item.isImg)item.url=URL.createObjectURL(file);
   attachments.push(item);
   if(item.isImg||item.isText)void prepareAttachmentUpload(item).catch(()=>{});

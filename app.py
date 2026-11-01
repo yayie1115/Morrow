@@ -2015,8 +2015,71 @@ def prevent_stale_app_shell(response):
 # ---------------------------------------------------------------------------
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 ALLOWED_TEXT_EXTS = {".txt", ".md", ".markdown"}
+DOC_EXTS = {".pdf": "pdf", ".docx": "word", ".xlsx": "excel"}
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_TEXT_BYTES = 500 * 1024
+MAX_DOC_BYTES = 20 * 1024 * 1024
+MAX_EXTRACT_CHARS = 120000
+
+
+def _extract_document_text(blob, ext):
+    """把 pdf/docx/xlsx 抽成纯文本；返回 (text, error)。"""
+    kind = DOC_EXTS.get(ext)
+    import io
+    try:
+        if kind == "pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(blob))
+            if reader.is_encrypted:
+                try:
+                    reader.decrypt("")
+                except Exception:
+                    return None, "这个 PDF 有密码，先解锁再发"
+            parts = []
+            for index, page in enumerate(reader.pages, 1):
+                text = page.extract_text() or ""
+                if text.strip():
+                    parts.append("【第 %d 页】\n%s" % (index, text.strip()))
+            text = "\n\n".join(parts)
+            if not text.strip():
+                return None, "这个 PDF 里没有可以提取的文字（可能是扫描件），可以先截图发给我看"
+        elif kind == "word":
+            from docx import Document
+            document = Document(io.BytesIO(blob))
+            parts = [p.text.strip() for p in document.paragraphs if p.text.strip()]
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if any(cells):
+                        parts.append(" | ".join(cells))
+            text = "\n".join(parts)
+        elif kind == "excel":
+            from openpyxl import load_workbook
+            book = load_workbook(io.BytesIO(blob), read_only=True, data_only=True)
+            parts = []
+            for sheet in book.worksheets:
+                parts.append("【工作表：%s】" % sheet.title)
+                count = 0
+                for row in sheet.iter_rows(values_only=True):
+                    values = ["" if value is None else str(value) for value in row]
+                    if any(value.strip() for value in values):
+                        parts.append("\t".join(values).rstrip())
+                        count += 1
+                    if count >= 2000:
+                        parts.append("…（这张表太长，只取了前 2000 行）")
+                        break
+            book.close()
+            text = "\n".join(parts)
+        else:
+            return None, "这个格式还不支持"
+    except Exception as exc:  # noqa: BLE001 — 坏文件不该让上传接口 500
+        return None, "读不了这个文件（%s）" % type(exc).__name__
+    text = (text or "").strip()
+    if not text:
+        return None, "文件里没有可读的文字"
+    if len(text) > MAX_EXTRACT_CHARS:
+        text = text[:MAX_EXTRACT_CHARS] + "\n…（内容太长，后面截断了）"
+    return text, None
 
 
 def _attachment_from_upload(file_storage):
@@ -2081,7 +2144,27 @@ def _attachment_from_upload(file_storage):
             "text": text,
         }, None
 
-    return None, "只支持图片和 txt / md 文本"
+    if ext in DOC_EXTS:
+        if len(blob) > MAX_DOC_BYTES:
+            return None, "文件太大了，先限制在 20MB 以内"
+        text, error = _extract_document_text(blob, ext)
+        if error:
+            return None, error
+        stored = f"{uuid.uuid4().hex}{ext}"
+        path = os.path.join(UPLOAD_DIR, stored)
+        with open(path, "wb") as f:
+            f.write(blob)
+        return {
+            "type": "text",
+            "name": name,
+            "mime": "text/plain",
+            "path": stored,
+            "url": f"/uploads/{stored}",
+            "size": len(blob),
+            "text": text,
+        }, None
+
+    return None, "只支持图片、txt / md，以及 pdf / docx / xlsx"
 
 
 @app.post("/api/uploads")
@@ -2742,7 +2825,8 @@ def _clean_attachments(raw):
         elif a.get("type") == "text":
             ext = os.path.splitext(path)[1].lower()
             text = a.get("text") or ""
-            if ext not in ALLOWED_TEXT_EXTS or not isinstance(text, str):
+            # pdf/docx/xlsx 上传时已经抽成纯文本，这里同样要放行，否则附件会在保存时被静默丢掉。
+            if (ext not in ALLOWED_TEXT_EXTS and ext not in DOC_EXTS) or not isinstance(text, str):
                 continue
             out.append({
                 "type": "text",
