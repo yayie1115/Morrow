@@ -40,7 +40,7 @@ class Node{
 }
 const audios=[];class Audio extends Node{
  constructor(){super('audio');this.paused=true;this.duration=12.4;this.currentTime=0;audios.push(this);}
- set src(v){this.attrs.src=v;}get src(){return this.attrs.src;}load(){}pause(){this.paused=true;this.fire('pause');}play(){this.paused=false;this.fire('play');return Promise.resolve();}
+ set src(v){this.attrs.src=v;}get src(){return this.attrs.src;}load(){}pause(){this.paused=true;this.fire('pause');}play(){this.paused=false;this.fire('playing');return Promise.resolve();}
 }
 const window={},document={createElement:t=>new Node(t),addEventListener(){},getElementById:()=>null};
 vm.runInNewContext(fs.readFileSync('static/chat-voice.js','utf8'),{window,document,Audio,console,setTimeout,clearTimeout});
@@ -56,6 +56,8 @@ const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});bu
 window.sakieChatVoice.stop();assert.equal(audios[1].paused,true);
 const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,1);
 const grouped=window.sakieChatVoice.make({...artifact,id:5,meta:{subtitle_zh:['第一段译文。','第二段译文。']}},{sentenceCount:1});assert.equal(grouped.children[1].children.length,2);assert.ok(grouped.children[1].children[1].textContent.includes('第二段译文'));
+let resolvePending,rejectPending;const notices=[];const pendingRoot=window.sakieChatVoice.make({...artifact,id:8},{notify:x=>notices.push(x)}),pendingAudio=audios[audios.length-1],pendingButton=pendingRoot.children[0].children[0];pendingAudio.play=function(){this.paused=false;return new Promise((resolve,reject)=>{resolvePending=resolve;rejectPending=reject;});};
+pendingButton.onclick({stopPropagation(){}});assert.equal(pendingButton.attrs['aria-busy'],'true');pendingButton.onclick({stopPropagation(){}});assert.equal(pendingButton.attrs['aria-busy'],'false');resolvePending();Promise.resolve().then(()=>{assert.equal(pendingButton.attrs['aria-pressed'],'false');assert.equal(notices.length,0);});
 const plain=window.sakieChatVoice.make({...artifact,id:4,text:'<script>synthetic</script>',meta:{}},{sentenceCount:1});assert.equal(plain.children[1].children[0].textContent,'<script>synthetic</script>');
 """
         subprocess.run([shutil.which('node'),'-e',script],check=True)

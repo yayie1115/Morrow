@@ -166,6 +166,28 @@ class DailyChatStyleContractTest(unittest.TestCase):
     def test_daily_avatar_images_are_device_preferences_and_backed_up(self):
         self.assertIn('saveLocalPreference(kind==="user"?"dailyUserAvatar":"dailyAssistantAvatar"', self.page)
         self.assertIn('"prefDailyAvatars","dailyUserAvatar","dailyAssistantAvatar"', self.page)
+    def test_single_bubble_ranges_and_voice_marker_keep_other_text(self):
+        import shutil,subprocess
+        if not shutil.which('node'):self.skipTest('Node unavailable')
+        source=self.page
+        splitter=source[source.index('function splitReplyBlocks('):source.index('function setAIBody(')]
+        helpers=source[source.index('function singleTextSource('):source.index('function openSingleTextSheet(')]
+        script=r"""
+const assert=require('assert'),fs=require('fs'),vm=require('vm');const window={};vm.runInNewContext(fs.readFileSync('static/chat-parts.js','utf8'),{window});
+const trimReplyStart=s=>(s||'').replace(/^(?:[ \t]*\r?\n)+/,'');
+const isAImsg=w=>w.ai,activeVoiceArtifact=w=>w.voice;
+"""+splitter+helpers+r"""
+const source='\n\n同样。\r\n\r\n同样。\r\n\r\n尾巴。';const ranges=window.sakieChatParts.ranges(source,splitReplyBlocks);assert.equal(ranges.length,3);
+assert.equal(window.sakieChatParts.replace(source,ranges[1],'只改中间。'),'\n\n同样。\r\n\r\n只改中间。\r\n\r\n尾巴。');
+assert.equal(window.sakieChatParts.replace(source,ranges[1],''),'\n\n同样。\r\n\r\n\r\n\r\n尾巴。');assert.throws(()=>window.sakieChatParts.replace('已变化',ranges[1],'x'));
+const fenced='开头。\n\n```txt\na\n\nb\n```\n\n结尾。';assert.equal(window.sakieChatParts.ranges(fenced,splitReplyBlocks).length,3);
+const raw='前文。\n\n后文。';const offset=raw.indexOf('后');const wrap={ai:true,isConnected:true,_versions:[raw],_vi:0,voice:{meta:{text_offset:offset}}};
+const endRange=window.sakieChatParts.ranges(raw.slice(offset),splitReplyBlocks)[0];endRange.start+=offset;endRange.end+=offset;endRange.sourceText=raw;endRange.sourceIndex=0;
+const editable=singleEditableRange(wrap,endRange);assert.equal(window.sakieChatParts.replace(editable.editable,editable,'改好的后文。'),'前文。\n\n[[声音信]]改好的后文。');
+assert.equal(validSingleTextSource(wrap,endRange),true);wrap._vi=1;assert.equal(validSingleTextSource(wrap,endRange),false);
+"""
+        subprocess.run([shutil.which('node'),'-e',script],check=True)
+
 
 
 if __name__ == "__main__":

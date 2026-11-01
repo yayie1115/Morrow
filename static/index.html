@@ -208,8 +208,10 @@
     .treasury-copy{display:grid;gap:4px;flex:1;min-width:0;}.treasury-copy strong{font-size:12px;font-weight:500;letter-spacing:.1em;color:var(--text-secondary);}.treasury-copy>span{font-size:16px;line-height:1.25;color:var(--text-primary);font-weight:550;font-variant-numeric:tabular-nums;}.treasury-pending{flex:none;max-width:35%;padding:4px 7px;border:1px dashed color-mix(in srgb,var(--accent-strong) 45%,transparent);border-radius:4px;font-size:10px;line-height:1.4;color:var(--accent-strong);transform:rotate(-4deg);}.treasury-pending[hidden]{display:none;}.treasury-arrow{font-size:18px;color:var(--text-secondary);}
     body .message-ai .ai-part.chat-voice-message,body.ai-bubble .message-ai .ai-part.chat-voice-message,body.daily-chat .message-ai .ai-part.chat-voice-message{width:260px;max-width:100%;padding:0;border:0;border-radius:0;background:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;}
     .chat-voice-row{display:flex;align-items:center;gap:8px;width:100%;}
-    .chat-voice-play{position:relative;display:flex;align-items:center;justify-content:space-between;flex:0 1 166px;min-width:95px;min-height:43px;gap:18px;padding:10px 15px;border:1px solid color-mix(in srgb,var(--glass-border) 72%,transparent);border-radius:13px;background:var(--bubble-ai-solid,var(--surface-raised));box-shadow:0 1px 2px var(--shadow);color:var(--text-primary);text-align:left;-webkit-tap-highlight-color:transparent;}
+    .chat-voice-play{position:relative;display:flex;align-items:center;justify-content:space-between;flex:0 1 var(--chat-voice-width,110px);min-width:100px;min-height:43px;gap:18px;padding:10px 15px;border:1px solid color-mix(in srgb,var(--glass-border) 72%,transparent);border-radius:13px;background:var(--bubble-ai-solid,var(--surface-raised));box-shadow:0 1px 2px var(--shadow);color:var(--text-primary);text-align:left;-webkit-tap-highlight-color:transparent;}
     .chat-voice-play::before{content:"";position:absolute;left:-4px;top:15px;width:7px;height:10px;background:var(--bubble-ai-solid,var(--surface-raised));clip-path:polygon(100% 0,0 50%,100% 100%);}
+    .chat-voice-play[aria-busy="true"]::after{content:"";position:absolute;left:41px;top:17px;width:8px;height:8px;border:1px solid var(--border);border-top-color:var(--text-secondary);border-radius:50%;animation:chatVoiceLoading .8s linear infinite;}
+    @keyframes chatVoiceLoading{to{transform:rotate(360deg)}}
     .chat-voice-play:focus-visible,.chat-voice-text-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}.chat-voice-duration{white-space:nowrap;font-size:14px;line-height:1;font-variant-numeric:tabular-nums;color:var(--text-primary);}
     .chat-voice-icon{position:relative;display:block;width:21px;height:22px;flex:none;color:var(--text-primary);}.chat-voice-icon i{position:absolute;left:calc(var(--arc-index)*-1px);top:50%;display:block;width:calc(5px + var(--arc-index)*7px);height:calc(5px + var(--arc-index)*8px);border:2px solid transparent;border-right-color:currentColor;border-radius:50%;transform:translateY(-50%);}.chat-voice-message.playing .chat-voice-icon i{animation:chatVoiceArc 1s steps(1,end) infinite;animation-delay:calc(var(--arc-index)*-.2s);}
     @keyframes chatVoiceArc{0%,65%{opacity:1}66%,100%{opacity:.15}}
@@ -4809,7 +4811,8 @@
 
 <script src="/static/ui-preferences.js?v=2"></script>
 <script src="/static/chat-viewport.js?v=9"></script>
-<script src="/static/chat-voice.js?v=3"></script>
+<script src="/static/chat-voice.js?v=4"></script>
+<script src="/static/chat-parts.js?v=1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -6280,14 +6283,14 @@ function setAIBody(wrap){
   wrap._versions[wrap._vi]=trimReplyStart(wrap._versions[wrap._vi]);
   const body=wrap.querySelector(".message-ai");body.innerHTML="";
   const visible=wrap._versions[wrap._vi].replace(/(?:\r?\n)?\s*(?:\[\[(?:表(?:情(?:\s*[:：]\s*[^\[\]\r\n]*)?)?)?(?:\]\]?)?|\[表(?:情(?:\s*[:：]\s*[^\[\]\r\n]*)?)?(?:\])?)\s*$/u,"");
-  const renderText=text=>splitReplyBlocks(text).forEach(block=>{
+  const renderText=(text,base=0)=>window.sakieChatParts.ranges(text,splitReplyBlocks).forEach(range=>{
     const part=document.createElement("div");part.className="ai-part";
-    part.innerHTML=renderMarkdown(block);body.appendChild(part);
+    part.innerHTML=renderMarkdown(range.text);bindSingleTextPart(part,wrap,{...range,start:base+range.start,end:base+range.end});body.appendChild(part);
   });
   const voice=activeVoiceArtifact(wrap);
   if(voice){const legacyReplace=voice.meta?.text_offset==null&&visible.trim()===(voice.text||"").trim();
     const source=legacyReplace?"":visible,offset=Math.max(0,Math.min(Number(voice.meta?.text_offset??source.length),source.length));
-    renderText(source.slice(0,offset));body.appendChild(window.sakieChatVoice.make(voice,{notify:toast}));renderText(source.slice(offset));}
+    renderText(source.slice(0,offset));body.appendChild(window.sakieChatVoice.make(voice,{notify:toast}));renderText(source.slice(offset),offset);}
   else renderText(visible);
   renderStickers(body,wrap._attachmentVersions?.[wrap._vi]||[],true);
   const parts=[...body.querySelectorAll(".ai-part")];
@@ -6473,7 +6476,7 @@ function renderUserBody(wrap){
   const text=wrap._text||"",parts=document.body.classList.contains("daily-chat")?splitReplyBlocks(text):[];
   b.classList.toggle("user-bubble-stack",parts.length>1);
   if(parts.length>1){
-    b.innerHTML="";parts.forEach(part=>{const bubble=document.createElement("div");bubble.className="user-part";const copy=document.createElement("div");copy.className="u-text";copy.textContent=part;bubble.appendChild(copy);b.appendChild(bubble);});
+    b.innerHTML="";window.sakieChatParts.ranges(text,splitReplyBlocks).forEach(range=>{const bubble=document.createElement("div");bubble.className="user-part";const copy=document.createElement("div");copy.className="u-text";copy.textContent=range.text;bubble.appendChild(copy);bindSingleTextPart(bubble,wrap,range);b.appendChild(bubble);});
   }else{b.innerHTML='<div class="u-text"></div>';b.querySelector(".u-text").textContent=text;}
   const time=wrap.querySelector(".user-time");
   time.textContent=fmtClock(wrap._ts);time.hidden=false;
@@ -6538,6 +6541,7 @@ function addUser(text,id,versions,active,attachments,ts){
   wrap._id=id;wrap._ts=ts||nowStamp();wrap._text=wrap._versions[wrap._vi];
   wrap._attachments=wrap._attachmentVersions[wrap._vi]||[];
   const b=wrap.querySelector(".bubble-user");renderUserBody(wrap);
+  b.addEventListener("click",event=>{if(!event.target.closest(".user-part,button,a")&&!KEEPSAKE_SELECTING)openSingleTextSheet(wrap,{start:0,end:wrap._text.length,text:wrap._text,sourceText:wrap._text,sourceIndex:wrap._vi});});
   attachLongPress(b,()=>openUserSheet(wrap));
   attachLongPress(wrap.querySelector(".user-media"),()=>openUserSheet(wrap));
   ensureKeepsakeCheck(wrap);
@@ -6763,11 +6767,54 @@ function setStreaming(on){streaming=on;const b=$("#sendBtn");
   if(!on&&!preparingSend)updateSendAvailability();if(!on)setTimeout(()=>pollMusicCommands(true),180);}
 $("#sendBtn").onclick=()=>{if(streaming)void stopLiveReply();else send();};
 
-let editingMsg=null;  // 用户或 AI 消息都行：发送 = 给这条加一个版本，不发新消息
+function singleTextSource(wrap){return (isAImsg(wrap)?wrap._versions?.[wrap._vi]:wrap._text)||"";}
+function validSingleTextSource(wrap,range){return wrap.isConnected&&wrap._vi===range.sourceIndex&&singleTextSource(wrap)===range.sourceText;}
+function bindSingleTextPart(part,wrap,range){
+  const snapshot={...range,sourceIndex:wrap._vi,sourceText:singleTextSource(wrap)};let held=false;
+  const interactive=event=>!!event.target.closest("button,a,input,textarea,summary");
+  part.addEventListener("touchstart",event=>{part._interactivePart=interactive(event);event.stopPropagation();},{passive:true});
+  part.addEventListener("contextmenu",event=>{part._interactivePart=interactive(event);event.stopPropagation();});
+  attachLongPress(part,()=>{held=true;setTimeout(()=>held=false,700);openSingleTextSheet(wrap,snapshot);},()=>!part._interactivePart&&!KEEPSAKE_SELECTING);
+  part.addEventListener("click",event=>{if(interactive(event)||held||KEEPSAKE_SELECTING)return;event.stopPropagation();openSingleTextSheet(wrap,snapshot);});
+}
+function singleEditableRange(wrap,range){
+  const raw=singleTextSource(wrap);let editable=raw,start=range.start,end=range.end;
+  if(isAImsg(wrap)){const voice=activeVoiceArtifact(wrap);if(voice){const offset=Math.max(0,Math.min(Number(voice.meta?.text_offset??raw.length),raw.length));editable=raw.slice(0,offset)+"[[声音信]]"+raw.slice(offset);if(start>=offset)start+="[[声音信]]".length;if(end>offset)end+="[[声音信]]".length;}}
+  if(editable.slice(start,end)!==range.text)throw new Error("气泡位置已变化，请重新选择");
+  return {...range,start,end,editable};
+}
+function openSingleTextSheet(wrap,range){
+  const unavailable=streaming||!wrap._id;
+  openSheet([
+    {label:"复制此气泡",svg:SVG_COPY,fn:()=>copyText(range.text)},
+    {label:"修改此气泡",svg:SVG_EDIT,disabled:unavailable,fn:()=>{
+      if(!validSingleTextSource(wrap,range)){toast("消息版本已变化，请重新选择气泡");return;}
+      let selected;try{selected=singleEditableRange(wrap,range);}catch(error){toast(error.message);return;}
+      startEdit(wrap);editingPart=selected;input.value=range.text;$("#editBanner .txt").textContent="只修改这个气泡 · 改完点发送";autoGrow();input.focus();
+    }},
+    {label:"删除此气泡",svg:SVG_TRASH,danger:true,disabled:unavailable,fn:()=>deleteSingleTextPart(wrap,range)},
+    {label:"整条消息操作",svg:SVG_EDIT,fn:()=>isAImsg(wrap)?openAISheet(wrap):openUserSheet(wrap)},
+  ]);
+}
+async function deleteSingleTextPart(wrap,range){
+  if(streaming||wrap._partSaving||!validSingleTextSource(wrap,range)){toast("消息已变化或正在处理，请重新选择");return;}
+  if(wrap._partSaveUncertain){toast("上次保存结果待确认，请先刷新核对");return;}
+  let selected,text;try{selected=singleEditableRange(wrap,range);text=window.sakieChatParts.replace(selected.editable,selected,"");}catch(error){toast(error.message);return;}
+  const sourceIndex=wrap._vi,ai=isAImsg(wrap),finalAttachments=ai?(wrap._attachmentVersions?.[sourceIndex]||[]).filter(item=>item.type==="sticker"):(wrap._attachments||[]),sourceArtifacts=ai?[...(wrap._artifactVersions?.[sourceIndex]||[])]:[];
+  if(!text.trim()&&!finalAttachments.length&&!sourceArtifacts.length){await delMessage(wrap,true);return;}
+  if(!await bubbleConfirm({title:"删除这个气泡？",message:"只移除选中的文字气泡，其余内容保持不变。",confirmText:"删除",danger:true}))return;
+  if(!validSingleTextSource(wrap,range)){toast("消息版本已变化，请重新选择气泡");return;}
+  wrap._partSaving=true;
+  try{const response=await api("/api/chat/message/"+wrap._id+"/version",{method:"POST",body:JSON.stringify({content:text,attachments:finalAttachments,source_index:sourceIndex})});const saved=await response.json().catch(()=>({}));if(!response.ok){toast(saved.error||"删除未保存，请刷新核对");return;}if(saved.ok!==true){wrap._partSaveUncertain=true;toast("保存回执未确认，请先刷新核对");return;}applySavedMessageEdit(wrap,saved,text,finalAttachments,sourceIndex,sourceArtifacts);toast("已删除这个气泡");}
+  catch{wrap._partSaveUncertain=true;toast("保存结果待确认，请先刷新核对，不会自动重试");}
+  finally{wrap._partSaving=false;}
+}
+let editingMsg=null,editingPart=null;  // 用户或 AI 消息都行：发送 = 给这条加一个版本，不发新消息
 const isAImsg=w=>w.classList.contains("ai-msg");
 function startEdit(wrap){
   if(streaming){toast("等这次回答收好后再修改");return;}
   resetComposerAttachments();
+  editingPart=null;
   editingMsg=wrap;
   const currentAttachments=isAImsg(wrap)?(wrap._attachmentVersions?.[wrap._vi]||[]):(wrap._attachments||[]);
   const editableAttachments=isAImsg(wrap)?currentAttachments.filter(saved=>saved.type==="sticker"):currentAttachments;
@@ -6779,12 +6826,18 @@ function startEdit(wrap){
   let editable=(isAImsg(wrap)?wrap._versions[wrap._vi]:wrap._text)||"";
   if(isAImsg(wrap)){const voice=activeVoiceArtifact(wrap);if(voice){const offset=Math.max(0,Math.min(Number(voice.meta?.text_offset??editable.length),editable.length));editable=editable.slice(0,offset)+"[[声音信]]"+editable.slice(offset);}}
   input.value=editable;autoGrow();
+  $("#editBanner .txt").textContent="修改这条消息 · 改完点发送";
   $("#editBanner").hidden=false;input.focus();scrollDown(true);
 }
-function cancelEdit(){editingMsg=null;$("#editBanner").hidden=true;input.value="";resetComposerAttachments();autoGrow();}
+function cancelEdit(){editingMsg=null;editingPart=null;$("#editBanner").hidden=true;input.value="";resetComposerAttachments();autoGrow();}
 $("#editCancel").onclick=cancelEdit;
 async function submitEdit(text){
-  const wrap=editingMsg;
+  const wrap=editingMsg,partDraft=editingPart;
+  if(editingPart){
+    if(!text.trim()){toast("清空这一泡请使用删除此气泡");return;}
+    if(!validSingleTextSource(wrap,editingPart)){toast("消息版本已变化，请重新选择气泡");return;}
+    text=window.sakieChatParts.replace(editingPart.editable,editingPart,text);
+  }
   if(!wrap._id){toast("这条还没存好，等一下再改");return;}
   let finalAttachments=[];
   {
@@ -6797,11 +6850,15 @@ async function submitEdit(text){
     catch(e){toast("附件上传失败："+e.message);return;}
     if(!text&&!finalAttachments.length)return;
   }
+  if(editingMsg!==wrap||(partDraft&&(!validSingleTextSource(wrap,partDraft)||editingPart!==partDraft))){toast("修改已取消或版本已变化，请重新核对");return;}
   const sourceIndex=wrap._vi,sourceArtifacts=isAImsg(wrap)?[...(wrap._artifactVersions?.[sourceIndex]||[])]:[];
   const payload={content:text,attachments:finalAttachments,source_index:sourceIndex};
   const r=await api("/api/chat/message/"+wrap._id+"/version",{method:"POST",body:JSON.stringify(payload)});
   const saved=await r.json().catch(()=>({}));if(!r.ok){toast(saved.error||"修改失败了");return;}
   cancelEdit();
+  applySavedMessageEdit(wrap,saved,text,finalAttachments,sourceIndex,sourceArtifacts);
+}
+function applySavedMessageEdit(wrap,saved,text,finalAttachments,sourceIndex,sourceArtifacts){
   if(isAImsg(wrap)){  // 编辑Morrow的回答 → 追加成新版本，think 跟着复制，下次回复读当前切的这条
     const originalAt=wrap._ats[wrap._vi]||wrap._ts;const editedText=saved.content??text;
     wrap._versions.push(editedText);wrap._reasonings.push(wrap._reasonings[sourceIndex]||"");
@@ -7265,10 +7322,10 @@ async function removeFav(wrap){
     toast("已取消收藏");
   }catch(e){toast("取消失败");}
 }
-async function delMessage(wrap){
+async function delMessage(wrap,wholeMessage=false){
   if(streaming){toast("等这次回答收好后再删除");return;}
   const ai=isAImsg(wrap),vers=wrap._versions||[];
-  if(wrap._id&&vers.length>1){          // 多版本：只删当前切到的这条
+  if(!wholeMessage&&wrap._id&&vers.length>1){          // 多版本：只删当前切到的这条
     if(!await bubbleConfirm({
       title:"删除当前版本",message:"要删掉现在看到的这一版吗？",
       note:"同一条消息的其他版本会继续保留。",confirmText:"删除",danger:true
@@ -7294,7 +7351,7 @@ async function delMessage(wrap){
     title:"删除消息",message:"要删掉这条消息吗？",
     note:"删除后不能恢复。",confirmText:"删除",danger:true
   }))return;   // 只有一条：删整条
-  if(wrap._id)await api("/api/chat/message/"+wrap._id,{method:"DELETE"});
+  if(wrap._id){try{const response=await api("/api/chat/message/"+wrap._id,{method:"DELETE"});if(!response.ok){toast("删除未保存，请刷新核对");return;}}catch{toast("删除结果待确认，请刷新核对");return;}}
   wrap.remove();refreshAllActions();scheduleDailyTimeDividers();updateToBottom();toast("已删除");
 }
 /* long-press (mobile) + contextmenu (desktop) */
