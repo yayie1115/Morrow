@@ -2262,6 +2262,16 @@ def display_name(name, args=None):
     return name
 
 
+def _apply_brand(text):
+    """把注册表里写死的 Morrow 换成当前的助手名。"""
+    if not text or "Morrow" not in str(text):
+        return text
+    try:
+        return str(text).replace("Morrow", _brand_name())
+    except Exception:
+        return text
+
+
 def _brand_name():
     """界面文案里的自称：跟随设置里的助手名。"""
     try:
@@ -2290,10 +2300,10 @@ def narrate(name, args=None):
     if target.startswith("mcp_"):
         server, _tool = _find_mcp_tool(target)
         if server:
-            return server["narrate"] or f"{_brand_name()}正在请 {server['name']} 帮忙"
+            return _apply_brand(server["narrate"]) or f"{_brand_name()}正在请 {server['name']} 帮忙"
         return f"{_brand_name()}正在请外面的朋友帮忙"
     item = _REGISTRY.get(target)
-    return item[1] if item else f"{_brand_name()}在忙活着"
+    return _apply_brand(item[1]) if item else f"{_brand_name()}在忙活着"
 
 
 def _failed_text(value):
