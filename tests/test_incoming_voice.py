@@ -72,6 +72,48 @@ class IncomingVoiceTests(unittest.TestCase):
             self.assertEqual(tuple(row),('ready','合成转写'))
         self.assertEqual(http.post.call_count,1)
 
+    def test_cancel_before_upload_and_after_saved_message(self):
+        c,sid=self.client();token=str(uuid.uuid4());body={'session_id':sid,'request_id':token}
+        self.assertEqual(app.app.test_client().post('/api/chat/voice-input/cancel',json=body).status_code,401)
+        self.assertEqual(c.post('/api/chat/voice-input/cancel',json=body).status_code,200)
+        self.assertEqual(c.post('/api/chat/voice-input/cancel',json=body).status_code,200)
+        self.assertEqual(self.upload(c,sid,token).status_code,410)
+        self.assertEqual(c.get(f'/api/chat/voice-input?session_id={sid}').get_json()['items'],[])
+        with app.app.app_context():aid=app.get_db().execute("SELECT id FROM message_artifacts WHERE run_id=?",(token,)).fetchone()[0]
+        self.assertEqual(c.post(f'/api/chat/voice-input/{aid}/retry',json={'session_id':sid}).status_code,410)
+        self.assertEqual(c.post('/api/chat/send',json={'session_id':sid,'voice_input_id':aid}).status_code,409)
+        with app.app.app_context():
+            db=app.get_db();mid=db.execute("INSERT INTO messages(session_id,role,content) VALUES (?,'user','synthetic saved')",(sid,)).lastrowid
+            db.execute("UPDATE message_artifacts SET status='ready',message_id=? WHERE id=?",(mid,aid));db.commit()
+        result=c.post('/api/chat/voice-input/cancel',json=body)
+        self.assertEqual(result.status_code,409);self.assertEqual(result.get_json()['message_id'],mid)
+        with app.app.app_context():self.assertEqual(app.get_db().execute('SELECT count(*) FROM messages WHERE id=?',(mid,)).fetchone()[0],1)
+
+    def test_cancel_during_analysis_prevents_late_commit(self):
+        import threading,time
+        c,sid=self.client();token=str(uuid.uuid4());aid=self.upload(c,sid,token).get_json()['id'];entered=threading.Event();release=threading.Event();remote='c'*32
+        http=mock.MagicMock();http.__enter__.return_value=http;http.post.return_value.json.return_value={'id':remote}
+        def response(url,**kwargs):
+            value=mock.Mock()
+            if url.endswith('/listen.png'):value.content=b'\x89PNG\r\n\x1a\nsynthetic';return value
+            entered.set();release.wait(3)
+            value.json.return_value={'id':remote,'status':'complete','transcript':{'text':'synthetic transcript'},'summary':{'duration_sec':2}}
+            return value
+        http.get.side_effect=response
+        with mock.patch('incoming_voice.connection',return_value=(http,'http://127.0.0.1:18765')):
+            incoming_voice.schedule(app.DB_PATH,app.UPLOAD_DIR,aid)
+            try:
+                self.assertTrue(entered.wait(3))
+                self.assertEqual(c.post('/api/chat/voice-input/cancel',json={'session_id':sid,'request_id':token}).status_code,200)
+            finally:release.set()
+            for _ in range(400):
+                if aid not in incoming_voice._running:break
+                time.sleep(.01)
+        self.assertNotIn(aid,incoming_voice._running)
+        with app.app.app_context():
+            row=app.get_db().execute('SELECT status,visible_text,message_id FROM message_artifacts WHERE id=?',(aid,)).fetchone()
+            self.assertEqual(tuple(row),('cancelled','',None))
+
     def test_hold_to_talk_waits_for_ready_and_stops_tracks(self):
         from pathlib import Path
         code=Path('static/chat-voice-input.js').read_text(encoding='utf-8')
@@ -81,6 +123,6 @@ class IncomingVoiceTests(unittest.TestCase):
         self.assertNotIn('get_latest_voice',code)
         self.assertIn("hold.addEventListener('pointerdown'",code)
         self.assertIn('c.startY-event.clientY>65',code)
-        self.assertIn('t.job=value;if(value.message_id){forget(t);return;}',code)
+        self.assertIn("value.status==='cancelled'||t.cancelled",code)
 
 if __name__=='__main__':unittest.main()

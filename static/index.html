@@ -3003,6 +3003,7 @@
     body.in-chat.daily-chat .chat-topbar{top:var(--chat-viewport-top,0px);}
   .user-voice-dialog{width:min(90vw,400px);box-sizing:border-box;border:1px solid var(--border,#d6e1ee);border-radius:22px;padding:20px;background:var(--surface,#fff);color:var(--text-primary,#344963);max-height:80dvh;overflow:auto}.user-voice-dialog::backdrop{background:#243e5c55}.user-voice-dialog h3{margin:0 0 12px;font-size:18px}.user-voice-dialog p{font-size:14px;line-height:1.6}.user-voice-dialog audio{width:100%;margin:8px 0}.voice-input-preview{font-size:14px;white-space:pre-wrap;max-height:25vh;overflow:auto}.voice-input-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.voice-input-actions button{padding:10px;border:1px solid #c9d9ec;border-radius:12px;background:#edf4ff;color:#344963}.voice-input-actions button:disabled{opacity:.45}.row-user .chat-voice-message{background:transparent;box-shadow:none;border:0;padding:0}.row-user .chat-voice-play{background:#dbe9fa}.row-user .chat-voice-transcript{white-space:pre-wrap}.row-user .chat-voice-message{width:calc(var(--chat-voice-width,110px) + 48px);max-width:100%}.row-user .chat-voice-row{flex-direction:row-reverse;justify-content:flex-start}.row-user .chat-voice-play{flex-direction:row-reverse}.row-user .chat-voice-play::before{left:auto;right:-4px;background:#dbe9fa;clip-path:polygon(0 0,100% 50%,0 100%)}.row-user .chat-voice-icon{transform:scaleX(-1)}.row-user .chat-voice-play[aria-busy="true"]::after{left:auto;right:41px}
 .voice-hold{flex:1;min-width:0;width:100%;min-height:44px;border:1px solid var(--glass-border,#cbd9ec);border-radius:14px;background:var(--surface-raised,#f8fbff);color:var(--text-primary,#344c68);font-family:inherit;font-size:16px;line-height:1.4;text-align:center;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.voice-hold[hidden]{display:none!important}.voice-hold.recording{background:var(--accent-soft,#dbe9fa)}.voice-hold.cancel-recording{color:#a45a65;background:#f9e7ec}body.voice-input-mode #input,body.voice-input-mode #expandBtn,body.voice-input-mode #sendBtn:not(.stop){display:none!important}.voice-recording-notice{position:fixed;left:50%;top:45%;transform:translate(-50%,-50%);z-index:20000;max-width:85vw;padding:20px 24px;border-radius:18px;background:#344c68ec;color:white;font-size:15px;text-align:center;pointer-events:none}.voice-recording-notice[hidden]{display:none}.voice-pending-status{font-size:11px;color:var(--text-secondary,#8398b1);text-align:right;max-width:260px;padding:6px 0;white-space:normal}.voice-pending-actions{display:flex;justify-content:flex-end;gap:10px}.voice-pending-actions button{font-size:12px;border:1px solid var(--glass-border,#cbd9ec);border-radius:9px;padding:5px 9px;background:var(--surface-raised,#fff);color:var(--text-primary,#344c68)}#voiceModeBtn{font-size:22px}
+.voice-pending .u-col{align-items:flex-end;min-width:0}.voice-pending-status{align-self:flex-end;max-width:210px;text-align:right;line-height:1.5;font-size:11px;padding:5px 0 0}.voice-pending-actions{align-self:flex-end;justify-content:flex-end;flex-wrap:wrap;gap:10px;max-width:230px;padding-top:4px}.voice-pending-actions button{background:transparent;border:0;border-radius:0;font-size:11px;line-height:1.5;padding:3px 0;color:var(--text-secondary,#8398b1)}.voice-pending-details{align-self:flex-end;max-width:230px;font-size:11px;line-height:1.6;color:var(--text-secondary,#8398b1);text-align:right}.voice-pending-details summary{cursor:pointer}.voice-pending-details p{margin:4px 0;overflow-wrap:anywhere}.chat-voice-more{background:transparent;border:0;color:var(--text-secondary,#8398b1);font-size:20px;line-height:1;padding:5px 2px;flex:none;cursor:pointer}.row-user .chat-voice-message.has-voice-actions{width:calc(var(--chat-voice-width,110px) + 76px)}.plus-pop-main #btnSticker{grid-column:auto}
 </style>
     <style>
       .keepsake-media-thumb{display:block;width:42px;height:42px;margin-top:4px;border-radius:7px;object-fit:cover}
@@ -3372,7 +3373,6 @@
         </div>
         <div class="plus-pop" id="plusPop" hidden>
           <div class="plus-pop-page plus-pop-main" id="plusMain">
-          <button id="btnVoiceInput" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>语音</button>
           <button id="btnCamera">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
             camera
@@ -4817,9 +4817,9 @@
 
 <script src="/static/ui-preferences.js?v=2"></script>
 <script src="/static/chat-viewport.js?v=9"></script>
-<script src="/static/chat-voice.js?v=7"></script>
+<script src="/static/chat-voice.js?v=8"></script>
 <script src="/static/chat-parts.js?v=1"></script>
-<script src="/static/chat-voice-input.js?v=2"></script>
+<script src="/static/chat-voice-input.js?v=3"></script>
 <script src="/static/voice-archive.js?v=1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
@@ -6501,7 +6501,7 @@ function renderUserBody(wrap){
   time.textContent=fmtClock(wrap._ts);time.hidden=false;
   b.hidden=!text.trim();
   const media=wrap.querySelector(".user-media");media.innerHTML="";
-  if(userVoice&&window.sakieChatVoice)media.appendChild(window.sakieChatVoice.make({id:userVoice.id,audio_url:userVoice.url,text:wrap._text,duration:userVoice.duration,meta:{}},{notify:toast}));
+  if(userVoice&&window.sakieChatVoice)media.appendChild(window.sakieChatVoice.make({id:userVoice.id,audio_url:userVoice.url,text:wrap._text,duration:userVoice.duration,meta:{}},{notify:toast,actions:()=>openUserSheet(wrap)}));
   const imageItems=(wrap._attachments||[]).filter(a=>a.type==="image"&&a.url);
   if(imageItems.length>=3){
     const shell=document.createElement("div");shell.className="photo-deck-shell";
@@ -6914,7 +6914,7 @@ async function sendUserVoice(job,owner,{pendingEl}={}){
     const confirmation=await api('/api/chat/voice-input/'+job.id+'?session_id='+owner);if(!confirmation.ok)throw Error('保存状态未确认');const receipt=await confirmation.json();if(receipt.message_id)return {saved:true};if(!userEl._id)userEl.remove();return {saved:false};
   }finally{sending=false;}
 }
-window.sakieVoiceInput.init({api,session:()=>sessionId,ensureSession,busy:()=>sending||streaming,send:sendUserVoice,notify:toast,avatar:host=>attachAvatar(host,"user"),scroll:()=>scrollDown(true)});
+window.sakieVoiceInput.init({api,session:()=>sessionId,ensureSession,busy:()=>sending||streaming,send:sendUserVoice,notify:toast,avatar:host=>attachAvatar(host,"user"),scroll:()=>scrollDown(true),menu:items=>openSheet(items),confirm:message=>bubbleConfirm({title:"移除待发送录音？",message,confirmText:"移除",danger:true}),reconcile:async owner=>{if(Number(sessionId)!==Number(owner))return;await loadMessages();if(await replyStillRunning())watchBackgroundReply();}});
 async function send(){
   if(sending||streaming)return;
   const text=input.value.trim();

@@ -42,8 +42,9 @@ def schedule(db_path,uploads,artifact_id):
         db=sqlite3.connect(db_path);db.row_factory=sqlite3.Row
         try:
             row=db.execute("SELECT * FROM message_artifacts WHERE id=? AND type='user_voice'",(artifact_id,)).fetchone()
-            if not row or row['message_id'] or row['status']=='ready':return
-            db.execute("UPDATE message_artifacts SET status='analyzing',error='' WHERE id=?",(artifact_id,));db.commit()
+            if not row or row['message_id'] or row['status'] in ('ready','cancelled'):return
+            changed=db.execute("UPDATE message_artifacts SET status='analyzing',error='' WHERE id=? AND message_id IS NULL AND status NOT IN ('cancelled','ready')",(artifact_id,));db.commit()
+            if not changed.rowcount:return
             meta=json.loads(row['meta'] or '{}')
             http,url=connection()
             with http:
@@ -53,15 +54,17 @@ def schedule(db_path,uploads,artifact_id):
                         r=http.post(url+'/api/upload?ext='+Path(row['file_path']).suffix.lstrip('.'),data=audio,timeout=(5,45));r.raise_for_status();remote=r.json()['id']
                     if len(remote)!=32 or any(c not in '0123456789abcdef' for c in remote):raise ValueError('invalid task id')
                     meta['remote_id']=remote
-                    db.execute('UPDATE message_artifacts SET meta=? WHERE id=?',(json.dumps(meta),artifact_id));db.commit()
+                    db.execute('UPDATE message_artifacts SET meta=? WHERE id=? AND status!="cancelled" AND message_id IS NULL',(json.dumps(meta),artifact_id));db.commit()
                 deadline=time.monotonic()+610
                 while time.monotonic()<deadline:
+                    current=db.execute('SELECT status FROM message_artifacts WHERE id=?',(artifact_id,)).fetchone()
+                    if not current or current['status']=='cancelled':return
                     r=http.get(url+'/api/jobs/'+remote,timeout=(5,15));r.raise_for_status();result=r.json()
                     if result.get('id')!=remote:raise ValueError('task mismatch')
                     if result['status']=='complete':break
                     if result['status']=='failed':
                         meta.pop('remote_id',None)
-                        db.execute('UPDATE message_artifacts SET meta=? WHERE id=?',(json.dumps(meta),artifact_id));db.commit()
+                        db.execute('UPDATE message_artifacts SET meta=? WHERE id=? AND status!="cancelled" AND message_id IS NULL',(json.dumps(meta),artifact_id));db.commit()
                         raise ValueError('analysis failed')
                     time.sleep(1)
                 else:raise TimeoutError()
@@ -75,11 +78,11 @@ def schedule(db_path,uploads,artifact_id):
                 name=uuid.uuid4().hex+'.png';target=Path(uploads)/name
                 target.write_bytes(chart.content)
                 meta.update({'summary':summary,'duration':duration,'chart_path':name})
-                db.execute("UPDATE message_artifacts SET status='ready',visible_text=?,meta=?,error='',updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL",(text,json.dumps(meta,ensure_ascii=False),artifact_id));db.commit()
+                db.execute("UPDATE message_artifacts SET status='ready',visible_text=?,meta=?,error='',updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL AND status!='cancelled'",(text,json.dumps(meta,ensure_ascii=False),artifact_id));db.commit()
         except Exception as error:
             # Never return provider/local paths, keys or audio contents in errors.
             message='录音已保存，但没有识别出文字。可重试或重新录制。' if isinstance(error,SpeechNotRecognized) else '电脑分析暂时不可用或任务已中断。录音已保留，可重试。'
-            db.execute("UPDATE message_artifacts SET status='failed',error=?,updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL",(message,artifact_id));db.commit()
+            db.execute("UPDATE message_artifacts SET status='failed',error=?,updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL AND status!='cancelled'",(message,artifact_id));db.commit()
         finally:
             db.close()
             with _lock:_running.discard(artifact_id)

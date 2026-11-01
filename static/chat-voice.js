@@ -18,7 +18,7 @@
     if(!probe.getAttribute('src')){probe.preload='metadata';probe.src=job.url;probe.load();}
   }
   const observer=typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){observer.unobserve(entry.target);waiting.delete(entry.target);const job=entry.target._voiceProbe;if(job){probeQueue.push(job);pump();}}},{rootMargin:'0px'}):null;
-  function make(artifact,{notify=()=>{}}={}){
+  function make(artifact,{notify=()=>{},actions=null}={}){
     const root=document.createElement('div');root.className='ai-part chat-voice-message';root.dataset.artifactId=String(artifact.id);
     const play=document.createElement('button');play.type='button';play.className='chat-voice-play';play.setAttribute('aria-label','播放语音');play.setAttribute('aria-pressed','false');play.setAttribute('aria-busy','false');
     const icon=document.createElement('span');icon.className='chat-voice-icon';icon.setAttribute('aria-hidden','true');
@@ -27,7 +27,9 @@
     play.append(icon,time);
     const row=document.createElement('div');row.className='chat-voice-row';
     const textButton=document.createElement('button');textButton.type='button';textButton.className='chat-voice-text-toggle';textButton.textContent='文字';textButton.setAttribute('aria-expanded','false');
-    row.append(play,textButton);root.appendChild(row);
+    row.append(play,textButton);
+    if(typeof actions==='function'){const more=document.createElement('button');more.type='button';more.className='chat-voice-more';more.textContent='⋯';more.setAttribute('aria-label','语音操作');more.onclick=e=>{e.stopPropagation();actions();};row.appendChild(more);root.classList.add('has-voice-actions');}
+    root.appendChild(row);
     const audio=new Audio();audio.preload='none';audio.hidden=true;let failed=false,pending=false,attempt=0;
     const reset=()=>{pending=false;root.classList.remove('playing');root.classList.remove('loading');play.setAttribute('aria-busy','false');play.setAttribute('aria-label','播放语音');play.setAttribute('aria-pressed','false');if(playing?.root===root)playing=null;};
     const updateDuration=value=>{if(Number.isFinite(value)&&value>0){durationCache.set(artifact.audio_url,value);root.style.setProperty('--chat-voice-width','110px');if(time.textContent!==clock(value))time.textContent=clock(value);}};

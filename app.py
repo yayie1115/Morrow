@@ -3174,7 +3174,7 @@ def _music_context_prompt(raw):
 def voice_input_list():
     import incoming_voice
     sid=request.args.get("session_id",type=int)
-    rows=get_db().execute("SELECT * FROM message_artifacts WHERE type='user_voice' AND session_id=? AND message_id IS NULL ORDER BY id DESC LIMIT 10",(sid,)).fetchall()
+    rows=get_db().execute("SELECT * FROM message_artifacts WHERE type='user_voice' AND session_id=? AND message_id IS NULL AND status!='cancelled' ORDER BY id DESC LIMIT 10",(sid,)).fetchall()
     return jsonify({"enabled":incoming_voice.configured(),"items":[incoming_voice.public(r) for r in rows]})
 
 
@@ -3196,6 +3196,7 @@ def voice_input_upload():
     existing=db.execute("SELECT * FROM message_artifacts WHERE type='user_voice' AND run_id=?",(token,)).fetchone()
     if existing:
         if existing['session_id']!=sid:return jsonify({"error":"语音会话冲突"}),409
+        if existing['status']=='cancelled':return jsonify({'error':'这条待发送录音已取消','cancelled':True}),410
         import hashlib
         if json.loads(existing['source_payload']).get('sha256')!=hashlib.sha256(content).hexdigest():return jsonify({"error":"同编号录音内容不一致"}),409
         return jsonify(incoming_voice.public(existing))
@@ -3208,7 +3209,7 @@ def voice_input_upload():
     except sqlite3.IntegrityError:
         os.unlink(os.path.join(UPLOAD_DIR,name));return jsonify({"error":"录音正在保存，请读取待处理录音"}),409
     if not incoming_voice.schedule(DB_PATH,UPLOAD_DIR,cur.lastrowid):
-        db.execute("UPDATE message_artifacts SET status='failed',error='分析队列已满，录音已保存，请稍后重试。' WHERE id=?",(cur.lastrowid,));db.commit()
+        db.execute("UPDATE message_artifacts SET status='failed',error='分析队列已满，录音已保存，请稍后重试。' WHERE id=? AND status!='cancelled'",(cur.lastrowid,));db.commit()
     row=db.execute("SELECT * FROM message_artifacts WHERE id=?",(cur.lastrowid,)).fetchone()
     return jsonify(incoming_voice.public(row)),202
 
@@ -3222,6 +3223,24 @@ def voice_input_status(aid):
     return jsonify(incoming_voice.public(row))
 
 
+@app.post("/api/chat/voice-input/cancel")
+@require_auth
+def voice_input_cancel():
+    data=request.get_json(silent=True) or {};sid=data.get('session_id')
+    try:token=str(uuid.UUID(str(data.get('request_id') or '')))
+    except ValueError:return jsonify({'error':'无效录音编号'}),400
+    db=get_db();db.execute('BEGIN IMMEDIATE')
+    if not db.execute('SELECT id FROM sessions WHERE id=?',(sid,)).fetchone():
+        db.rollback();return jsonify({'error':'会话不存在'}),404
+    row=db.execute("SELECT id,session_id,message_id FROM message_artifacts WHERE type='user_voice' AND run_id=?",(token,)).fetchone()
+    if row and row['session_id']!=sid:db.rollback();return jsonify({'error':'录音不属于当前会话'}),404
+    if row and row['message_id']:
+        db.rollback();return jsonify({'error':'这条语音已经保存，请从正式消息菜单删除','message_id':row['message_id']}),409
+    if row:db.execute("UPDATE message_artifacts SET status='cancelled',error='',updated_at=datetime('now','+8 hours') WHERE id=?",(row['id'],))
+    else:db.execute("INSERT INTO message_artifacts(type,session_id,run_id,status) VALUES ('user_voice',?,?,'cancelled')",(sid,token))
+    db.commit();return jsonify({'ok':True,'cancelled':True})
+
+
 @app.post("/api/chat/voice-input/<int:aid>/retry")
 @require_auth
 def voice_input_retry(aid):
@@ -3230,6 +3249,7 @@ def voice_input_retry(aid):
     row=get_db().execute("SELECT * FROM message_artifacts WHERE id=? AND type='user_voice' AND session_id=?",(aid,sid)).fetchone()
     if not row:return jsonify({"error":"语音不存在"}),404
     if row['message_id']:return jsonify({"error":"录音已经发送","message_id":row['message_id']}),409
+    if row['status']=='cancelled':return jsonify({'error':'录音已取消','cancelled':True}),410
     if not incoming_voice.schedule(DB_PATH,UPLOAD_DIR,aid):return jsonify({"error":"分析队列已满，请稍后重试"}),429
     return jsonify({"ok":True})
 
