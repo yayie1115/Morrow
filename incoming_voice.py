@@ -3,6 +3,9 @@ import json, os, sqlite3, threading, time, uuid
 from pathlib import Path
 import requests
 
+class SpeechNotRecognized(ValueError):
+    pass
+
 MAX_BYTES=25*1024*1024
 EXTENSIONS={'.wav':'audio/wav','.m4a':'audio/mp4','.mp4':'audio/mp4','.mp3':'audio/mpeg','.webm':'audio/webm','.ogg':'audio/ogg'}
 _lock=threading.Lock();_running=set();_slots=threading.BoundedSemaphore(3)
@@ -25,7 +28,7 @@ def connection():
 
 def public(row):
     meta=json.loads(row['meta'] or '{}')
-    return {'id':row['id'],'session_id':row['session_id'],'status':row['status'],
+    return {'id':row['id'],'request_id':row['run_id'],'session_id':row['session_id'],'status':row['status'],
             'message_id':row['message_id'],'text':row['visible_text'],
             'audio_url':'/uploads/'+row['file_path'],'duration':meta.get('duration'),
             'error':row['error'],'created_at':row['created_at']}
@@ -64,7 +67,8 @@ def schedule(db_path,uploads,artifact_id):
                 else:raise TimeoutError()
                 transcript=result.get('transcript',{});summary=result.get('summary',{})
                 text=transcript.get('text','').strip();duration=float(summary.get('duration_sec',0))
-                if not text or len(text)>30000 or not 0<duration<=300:raise ValueError('no usable transcript')
+                if not text:raise SpeechNotRecognized()
+                if len(text)>30000 or not 0<duration<=300:raise ValueError('invalid transcript')
                 if len(json.dumps(summary))>100000:raise ValueError('summary too large')
                 chart=http.get(url+'/api/jobs/'+remote+'/listen.png',timeout=(5,20));chart.raise_for_status()
                 if not chart.content.startswith(b'\x89PNG\r\n\x1a\n') or len(chart.content)>4*1024*1024:raise ValueError('invalid chart')
@@ -72,9 +76,10 @@ def schedule(db_path,uploads,artifact_id):
                 target.write_bytes(chart.content)
                 meta.update({'summary':summary,'duration':duration,'chart_path':name})
                 db.execute("UPDATE message_artifacts SET status='ready',visible_text=?,meta=?,error='',updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL",(text,json.dumps(meta,ensure_ascii=False),artifact_id));db.commit()
-        except Exception:
+        except Exception as error:
             # Never return provider/local paths, keys or audio contents in errors.
-            db.execute("UPDATE message_artifacts SET status='failed',error='电脑分析暂时不可用、录音无法识别或任务已中断。录音已保留，可重试。',updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL",(artifact_id,));db.commit()
+            message='录音已保存，但没有识别出文字。可重试或重新录制。' if isinstance(error,SpeechNotRecognized) else '电脑分析暂时不可用或任务已中断。录音已保留，可重试。'
+            db.execute("UPDATE message_artifacts SET status='failed',error=?,updated_at=datetime('now','+8 hours') WHERE id=? AND message_id IS NULL",(message,artifact_id));db.commit()
         finally:
             db.close()
             with _lock:_running.discard(artifact_id)

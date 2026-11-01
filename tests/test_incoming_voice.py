@@ -72,12 +72,15 @@ class IncomingVoiceTests(unittest.TestCase):
             self.assertEqual(tuple(row),('ready','合成转写'))
         self.assertEqual(http.post.call_count,1)
 
-    def test_recording_ui_has_explicit_send_and_stops_tracks(self):
+    def test_hold_to_talk_waits_for_ready_and_stops_tracks(self):
         from pathlib import Path
         code=Path('static/chat-voice-input.js').read_text(encoding='utf-8')
         self.assertIn('getTracks().forEach(t=>t.stop())',code)
-        self.assertIn("job.status!=='ready'",code)
-        self.assertIn('requestId=crypto.randomUUID()',code)
+        self.assertIn("t.job?.status!=='ready'",code)
+        self.assertIn('requestId:crypto.randomUUID()',code)
         self.assertNotIn('get_latest_voice',code)
+        self.assertIn("hold.addEventListener('pointerdown'",code)
+        self.assertIn('c.startY-event.clientY>65',code)
+        self.assertIn('t.job=value;if(value.message_id){forget(t);return;}',code)
 
 if __name__=='__main__':unittest.main()

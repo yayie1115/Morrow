@@ -164,7 +164,7 @@ it is not a sandbox and must never be exposed as a public unauthenticated API.
 
 ### Optional local voice input
 
-Chat → ＋ → 语音 supports recording, preview, local transcription and acoustic charts, then explicit send.
+Chat microphone mode supports hold-to-talk, release-to-send and slide-up cancellation. Upload, local transcription and acoustic charts run automatically; only successfully recognized recordings are submitted to the assistant.
 A successful analysis is required before an assistant reply; failures retain the recording for retry.
 The backend uses an authenticated loopback tunnel to the Windows analyzer, not MCP.
 Configure a backend-only `EARS_KEY_FILE` and optionally `EARS_LOCAL_PORT`; never expose the key to frontend code.
