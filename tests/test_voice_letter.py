@@ -236,7 +236,7 @@ class VoiceLetterTest(unittest.TestCase):
         )
         conn.commit();conn.close()
         history = json.dumps(chat_engine.get_history(sid), ensure_ascii=False)
-        record = "【声音信 · 内容：[flustered] 我才没有……[pause]只是想你。】"
+        record = "【语音 · 内容：[flustered] 我才没有……[pause]只是想你。】"
         self.assertIn(record, history)
         self.assertLess(history.index("先闭一下眼睛。"), history.index(record))
         self.assertLess(history.index(record), history.index("然后去听听。"))
@@ -277,7 +277,7 @@ class VoiceLetterTest(unittest.TestCase):
         self.assertEqual(edited["tool_run_id"], "run-voice")
         self.assertEqual(edited["artifact_offsets"][str(artifact_id)], len("新的前文。"))
         history = json.dumps(chat_engine.get_history(sid), ensure_ascii=False)
-        record = "【声音信 · 内容：I am here.】"
+        record = "【语音 · 内容：I am here.】"
         self.assertLess(history.index("新的前文。"), history.index(record))
         self.assertLess(history.index(record), history.index("新的后文。"))
         self.assertNotIn("[[声音信]]", history)
@@ -290,7 +290,7 @@ class VoiceLetterTest(unittest.TestCase):
         response = self.client.get("/")
         page = response.get_data(as_text=True)
         response.close()
-        for marker in ("声音信", 'id="voiceViewer"', 'id="tidyArtifactList"', "/api/artifacts",
+        for marker in ("语音", 'id="voiceViewer"', 'id="tidyArtifactList"', "/api/artifacts",
                        "openVoiceEnvelope", "voice-detail-next", "voice-stack-stage", "defaultVoiceDrawerGroupKey",
                        "voice-stack-shell-back", "voice-stack-shell-front", "renderVoiceDrawerBox", "voiceEnvelopeLift",
                        'd="M316 190 344 174v104q0 6-8 8l-28 16q8-5 8-16Z"', 'const drawerMode=tidyMode===',
@@ -321,6 +321,30 @@ class VoiceLetterTest(unittest.TestCase):
         ).fetchone()[0], 1)
         conn.close()
 
+    def test_archive_title_is_metadata_only_persistent_and_conflict_checked(self):
+        conn=sqlite3.connect(app.DB_PATH)
+        sid=conn.execute("INSERT INTO sessions(title) VALUES ('Synthetic title')").lastrowid
+        meta={'subtitle_zh':['合成译文'],'text_offset':4,'model':'synthetic'}
+        aid=conn.execute("INSERT INTO message_artifacts(type,session_id,run_id,status,visible_text,source_payload,meta) VALUES ('voice_letter',?,'title-run','ready','synthetic original','{\"script\":\"synthetic source\"}',?)",(sid,json.dumps(meta))).lastrowid
+        conn.commit();conn.close()
+        self.assertEqual(app.app.test_client().put(f'/api/artifacts/{aid}/title',json={'title':'x'}).status_code,401)
+        path=f'/api/artifacts/{aid}/title'
+        self.assertEqual(self.client.put(path,json={'title':'晚安','source_title':''}).status_code,200)
+        self.assertEqual(self.client.put(path,json={'title':'stale','source_title':''}).status_code,409)
+        self.assertEqual(self.client.put(path,json={'title':'x'*41}).status_code,400)
+        self.assertEqual(self.client.put(path,json={'title':'line\nbreak'}).status_code,400)
+        self.assertEqual(self.client.put(path,json={'title':'   '}).status_code,400)
+        listed=self.client.get('/api/artifacts?type=voice_letter&limit=1').get_json()
+        self.assertEqual(listed[0]['title'],'晚安')
+        detail=self.client.get(f'/api/artifacts/{aid}').get_json()
+        self.assertEqual(detail['text'],'synthetic original')
+        self.assertEqual(detail['source']['script'],'synthetic source')
+        self.assertEqual(detail['meta']['subtitle_zh'],meta['subtitle_zh'])
+        self.assertEqual(detail['meta']['text_offset'],4)
+        self.assertEqual(self.client.get(f'/api/artifacts?type=voice_letter&before={aid}').get_json(),[])
+        for query in ('limit=0','before=no','type=user_voice'):
+            self.assertEqual(self.client.get('/api/artifacts?'+query).status_code,400)
+
     @mock.patch("app._generate_tts_audio", return_value=(b"mp3", "audio/mpeg", 12, {}))
     @mock.patch("app.chat_engine.stream_chat")
     def test_chat_stream_persists_voice_without_tool_ledger(self, stream_chat, _generate):
@@ -335,8 +359,8 @@ class VoiceLetterTest(unittest.TestCase):
         def fake_stream(*_args, **kwargs):
             definition = kwargs["extra_tools"][0]["function"]
             self.assertEqual(definition["name"], voice_engine.TOOL_NAME)
-            self.assertEqual(kwargs["extra_narrations"][voice_engine.TOOL_NAME], "正在录一封给你")
-            self.assertIn("【声音信 · …】", kwargs["stable_extra"])
+            self.assertEqual(kwargs["extra_narrations"][voice_engine.TOOL_NAME], "正在生成语音")
+            self.assertIn("【语音 · …】", kwargs["stable_extra"])
             self.assertNotIn("【表情：…】", kwargs["stable_extra"])
             self.assertNotIn("[[表情:表情名]]", kwargs["stable_extra"])
             self.assertIn("右括号就是声音结束的位置", kwargs["stable_extra"])

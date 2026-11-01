@@ -3012,7 +3012,7 @@ def get_messages(session_id):
 def get_artifact_audio(artifact_id):
     row = get_db().execute("SELECT file_path,mime,status FROM message_artifacts WHERE id=?", (artifact_id,)).fetchone()
     if row is None or row["status"] != "ready":
-        return jsonify({"error": "声音信不存在"}), 404
+        return jsonify({"error": "语音不存在"}), 404
     relative = str(row["file_path"] or "").replace("\\", "/")
     full = os.path.abspath(os.path.join(UPLOAD_DIR, relative))
     if not relative or not full.startswith(os.path.abspath(UPLOAD_DIR) + os.sep) or not os.path.isfile(full):
@@ -3026,14 +3026,43 @@ def get_artifact_audio(artifact_id):
 @require_auth
 def get_artifact_detail(artifact_id):
     row = get_db().execute("SELECT * FROM message_artifacts WHERE id=?", (artifact_id,)).fetchone()
-    return jsonify(_artifact_dict(row, include_source=True)) if row else (jsonify({"error": "声音信不存在"}), 404)
+    return jsonify(_artifact_dict(row, include_source=True)) if row else (jsonify({"error": "语音不存在"}), 404)
 
 
 @app.get("/api/artifacts")
 @require_auth
 def list_artifacts():
-    rows = get_db().execute("SELECT * FROM message_artifacts WHERE status='ready' ORDER BY id DESC LIMIT 200").fetchall()
+    limit=request.args.get('limit',default=200,type=int);before=request.args.get('before',type=int)
+    if limit is None or not 1<=limit<=200 or ('before' in request.args and (before is None or before<1)):
+        return jsonify({'error':'无效的语音分页参数'}),400
+    where="status='ready'";params=[]
+    kind=request.args.get('type')
+    if kind:
+        if kind!='voice_letter':return jsonify({'error':'不支持的语音分类'}),400
+        where+=" AND type=?";params.append(kind)
+    if before is not None:where+=' AND id<?';params.append(before)
+    rows = get_db().execute('SELECT * FROM message_artifacts WHERE '+where+' ORDER BY id DESC LIMIT ?',params+[limit]).fetchall()
     return jsonify([_artifact_dict(row) for row in rows])
+
+
+@app.put("/api/artifacts/<int:artifact_id>/title")
+@require_auth
+def set_artifact_title(artifact_id):
+    data=request.get_json(silent=True) or {};title=data.get('title')
+    if not isinstance(title,str) or not title.strip() or len(title.strip())>40 or any(ord(c)<32 for c in title):
+        return jsonify({'error':'标题需为1至40个字符，且不能包含换行'}),400
+    db=get_db();db.execute('BEGIN IMMEDIATE')
+    row=db.execute("SELECT meta FROM message_artifacts WHERE id=? AND type='voice_letter' AND status='ready'",(artifact_id,)).fetchone()
+    if row is None:db.rollback();return jsonify({'error':'语音不存在'}),404
+    try:meta=json.loads(row['meta'] or '{}')
+    except (TypeError,ValueError):db.rollback();return jsonify({'error':'语音元数据异常，请稍后重试'}),409
+    if not isinstance(meta,dict):db.rollback();return jsonify({'error':'语音元数据异常，请稍后重试'}),409
+    current=meta.get('archive_title') or ''
+    if 'source_title' in data and data['source_title']!=current:
+        db.rollback();return jsonify({'error':'标题已变化，请重新读取','title':current}),409
+    meta['archive_title']=title.strip()
+    db.execute("UPDATE message_artifacts SET meta=?,updated_at=datetime('now','+8 hours') WHERE id=?",(json.dumps(meta,ensure_ascii=False),artifact_id));db.commit()
+    return jsonify({'ok':True,'id':artifact_id,'title':title.strip()})
 
 
 @app.put("/api/artifacts/<int:artifact_id>/favorite")
@@ -3047,7 +3076,7 @@ def set_artifact_favorite(artifact_id):
         (artifact_id,),
     ).fetchone()
     if row is None:
-        return jsonify({"error": "声音信不存在"}), 404
+        return jsonify({"error": "语音不存在"}), 404
     db.execute(
         "UPDATE message_artifacts SET favorite=?,updated_at=datetime('now','+8 hours') WHERE id=?",
         (favorite, artifact_id),
@@ -3472,10 +3501,11 @@ def add_message_version(msg_id):
             (msg_id, source_version["tool_run_id"]),
         ).fetchall()
         source_has_artifacts = bool(artifact_rows)
-        marker = "[[声音信]]"
+        content = content.replace("[[声音信]]", "[[语音]]")  # Keep legacy editor compatibility.
+        marker = "[[语音]]"
         marker_count = content.count(marker)
         if marker_count > 1:
-            return jsonify({"error": "一条编辑版本只能放一个声音信占位符"}), 400
+            return jsonify({"error": "一条编辑版本只能放一个语音占位符"}), 400
         if artifact_rows and marker_count == 1:
             marker_offset = content.index(marker)
             without_marker = content[:marker_offset] + content[marker_offset + len(marker):]
@@ -4266,7 +4296,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         current_user_message_id=vision_source_msg_id,
         extra_tools=[voice_engine.TOOL_DEFINITION] if voice_enabled else None,
         extra_executor=_voice_letter_executor(session_id, tool_run_id) if voice_enabled else None,
-        extra_narrations={voice_engine.TOOL_NAME: "正在录一封给你"} if voice_enabled else None,
+        extra_narrations={voice_engine.TOOL_NAME: "正在生成语音"} if voice_enabled else None,
     ))
     while True:
         try:
@@ -7280,10 +7310,10 @@ def _artifact_history_prompt(sticker_prompt="", voice_enabled=False):
     record_names = []
     rules = []
     if voice_enabled:
-        record_names.append("【声音信 · …】")
+        record_names.append("【语音 · …】")
         rules.append(
-            "【声音信 · 内容：…】的右括号就是声音结束的位置，括号外的文字不属于声音信；"
-            "需要发送声音信时必须调用 send_voice_letter。"
+            "【语音 · 内容：…】的右括号就是声音结束的位置，括号外的文字不属于语音；"
+            "需要发送语音时必须调用 send_voice_letter。"
         )
     if sticker_prompt:
         record_names.append("【表情：…】")
@@ -7339,7 +7369,7 @@ def _artifact_dict(row, *, include_source=False):
         "id": row["id"], "type": row["type"], "message_id": row["message_id"],
         "version_run_id": row["version_run_id"], "status": row["status"],
         "text": row["visible_text"], "meta": meta, "mime": row["mime"],
-        "favorite": bool(row["favorite"]),
+        "favorite": bool(row["favorite"]), "title": meta.get("archive_title") or "",
         "character_cost": row["character_cost"], "created_at": row["created_at"],
         "audio_url": f"/api/artifacts/{row['id']}/audio" if row["status"] == "ready" and row["file_path"] else "",
     }
@@ -7352,7 +7382,7 @@ def _artifact_dict(row, *, include_source=False):
         result["output"] = {
             "ok": row["status"] == "ready",
             "status": row["status"],
-            "message": "声音信已经寄出，可以自然地继续刚才的话。" if row["status"] == "ready" else row["error"],
+            "message": "语音已发送，可以自然地继续刚才的话。" if row["status"] == "ready" else row["error"],
             "character_cost": row["character_cost"],
             "mime": row["mime"],
         }
@@ -7371,9 +7401,9 @@ def _voice_letter_executor(session_id, run_id):
         parsed = voice_engine.parse_script((args or {}).get("script"))
         subtitles_zh = voice_engine.clean_subtitles((args or {}).get("subtitle_zh"), parsed["text"])
         if not parsed["text"]:
-            return outcome(False, "声音信里没有可朗读的正文。", "empty script")
+            return outcome(False, "语音里没有可朗读的正文。", "empty script")
         if len(parsed["script"]) > 5000:
-            return outcome(False, "声音信太长了，请缩短后再试。", "script too long")
+            return outcome(False, "语音太长了，请缩短后再试。", "script too long")
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         existing = conn.execute(
@@ -7387,9 +7417,9 @@ def _voice_letter_executor(session_id, run_id):
                 saved_source, saved_meta = {}, {}
             conn.close()
             if saved_source.get("script") != parsed["script"] or saved_meta.get("subtitle_zh", []) != subtitles_zh:
-                return outcome(False, "本轮声音信已经发送；新稿件或字幕与已发送内容不同，未按新稿重发。若要改语言，请在下一轮重新发送。",
+                return outcome(False, "本轮语音已经发送；新稿件或字幕与已发送内容不同，未按新稿重发。若要改语言，请在下一轮重新发送。",
                                "voice script conflict", hidden=True)
-            return outcome(True, "返回本轮已经发送的同一封声音信，没有再次生成。", hidden=True,
+            return outcome(True, "返回本轮已经发送的同一条语音，没有再次生成。", hidden=True,
                            artifact_id=existing["id"], visible_text=existing["visible_text"])
         try:
             subtitles_zh = voice_engine.validated_subtitles((args or {}).get("subtitle_zh"), parsed["text"])
@@ -7399,7 +7429,7 @@ def _voice_letter_executor(session_id, run_id):
         config = _tts_config(reveal_key=True, db=conn)
         if not config["api_key"] or not config["voice_id"] or not config["model"]:
             conn.close()
-            return outcome(False, "声音信暂时寄不出去：TTS 语音还没有配置完整。",
+            return outcome(False, "语音暂时无法生成：TTS 语音还没有配置完整。",
                            "TTS not configured", hidden=True)
         payload = {"script": parsed["script"], "tags": parsed["tags"]}
         if subtitles_zh:
@@ -7438,13 +7468,13 @@ def _voice_letter_executor(session_id, run_id):
                 (relative, mime, character_cost, json.dumps(meta, ensure_ascii=False), artifact_id),
             )
             conn.commit();conn.close()
-            return outcome(True, "声音信已经寄出，可以自然地继续刚才的话。", hidden=True,
+            return outcome(True, "语音已发送，可以自然地继续刚才的话。", hidden=True,
                            artifact_id=artifact_id, visible_text=parsed["text"])
         except Exception as exc:  # noqa: BLE001 - failure is returned to the model for a text fallback
             conn.execute("UPDATE message_artifacts SET status='failed',error=?,updated_at=datetime('now','+8 hours') WHERE id=?",
                          (str(exc)[:1000], artifact_id))
             conn.commit();conn.close()
-            return outcome(False, "声音信没有生成好，请改用普通文字回应。",
+            return outcome(False, "语音生成失败，请改用普通文字回应。",
                            str(exc)[:500], hidden=True)
     return execute
 

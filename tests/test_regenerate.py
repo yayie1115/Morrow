@@ -395,10 +395,10 @@ class RegenerateTargetTest(unittest.TestCase):
         sticker_only = app._artifact_history_prompt(prompt, False)
         self.assertIn("历史中的【表情：…】", sticker_only)
         self.assertIn("[[表情:表情名]]", sticker_only)
-        self.assertNotIn("声音信", sticker_only)
+        self.assertNotIn("【语音 ·", sticker_only)
         self.assertNotIn("send_voice_letter", sticker_only)
         both = app._artifact_history_prompt(prompt, True)
-        self.assertIn("【声音信 · …】与【表情：…】", both)
+        self.assertIn("【语音 · …】与【表情：…】", both)
         self.assertIn("send_voice_letter", both)
 
     def test_sticker_manual_tags_join_shared_catalog(self):

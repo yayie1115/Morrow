@@ -183,7 +183,7 @@ assert.equal(window.sakieChatParts.replace(source,ranges[1],''),'\n\n同样。\r
 const fenced='开头。\n\n```txt\na\n\nb\n```\n\n结尾。';assert.equal(window.sakieChatParts.ranges(fenced,splitReplyBlocks).length,3);
 const raw='前文。\n\n后文。';const offset=raw.indexOf('后');const wrap={ai:true,isConnected:true,_versions:[raw],_vi:0,voice:{meta:{text_offset:offset}}};
 const endRange=window.sakieChatParts.ranges(raw.slice(offset),splitReplyBlocks)[0];endRange.start+=offset;endRange.end+=offset;endRange.sourceText=raw;endRange.sourceIndex=0;
-const editable=singleEditableRange(wrap,endRange);assert.equal(window.sakieChatParts.replace(editable.editable,editable,'改好的后文。'),'前文。\n\n[[声音信]]改好的后文。');
+const editable=singleEditableRange(wrap,endRange);assert.equal(window.sakieChatParts.replace(editable.editable,editable,'改好的后文。'),'前文。\n\n[[语音]]改好的后文。');
 assert.equal(validSingleTextSource(wrap,endRange),true);wrap._vi=1;assert.equal(validSingleTextSource(wrap,endRange),false);
 """
         subprocess.run([shutil.which('node'),'-e',script],check=True)

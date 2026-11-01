@@ -904,9 +904,9 @@ def _keepsake_media(message, full=False):
         if artifact.get("type") != "voice_letter":
             continue
         source = artifact.get("source_payload") if isinstance(artifact.get("source_payload"), dict) else {}
-        title = source.get("title") or source.get("subject") or "声音信"
+        title = source.get("title") or source.get("subject") or "语音"
         visible = str(artifact.get("visible_text") or "").strip()
-        media.append(f"声音信：{title}" + (f"\n{visible}" if full and visible else ""))
+        media.append(f"语音：{title}" + (f"\n{visible}" if full and visible else ""))
     return media
 
 

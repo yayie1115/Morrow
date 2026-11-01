@@ -12,7 +12,7 @@ TOOL_DEFINITION = {
     "function": {
         "name": TOOL_NAME,
         "description": (
-            "给你寄一封真正会被她听到的声音信。只在此刻用声音比文字更贴近时使用，不要每轮都用。"
+            "给用户发送一条真正可以播放的语音。只在此刻用声音比文字更贴近时使用，不要每轮都用。"
             "script 的朗读语言由你根据对话情境自主选择，使用已配置 TTS 支持的语言；用户明确指定语言时优先遵循。"
             "不固定使用英文，也不必为了发语音刻意换成外语。写完整、自然的口语，说完想说的就好，长一点"
             "短一点都行；标点是语言的呼吸。允许省略号，长短、停顿、吞音和突然断掉。在局部情绪变化"
@@ -20,7 +20,7 @@ TOOL_DEFINITION = {
             "[playfully] [flustered] [nervously] [hesitant] [tired] [rushed] [light chuckle] "
             "[laughs] [sighs] [slows down]，也可使用简短、明确、可听见的自然英文短语。写的是声音，"
             "只写她能听到的东西。它和其他工具一样，可以在调用前后继续说普通文字；文字用于自然衔接，"
-            "声音信里说过的不用再重复。纯中文朗读的 subtitle_zh 可传空数组。非中文或中外文混合朗读时，"
+            "语音里说过的不用再重复。纯中文朗读的 subtitle_zh 可传空数组。非中文或中外文混合朗读时，"
             "传 subtitle_zh：按完整句、自然意群或整段提供准确的中文翻译；可用一条完整译文覆盖整段，不按标点数量强制对齐。省略号、破折号和停顿不需要拆成半句字幕；"
             "其中原本为中文的句子保留原意。英文音频标签只是声音控制标记，不要求正文使用英文。实际声音严格按 script 朗读，不会自动翻译；不得把英文原稿声称为中文语音。"
         ),
@@ -174,11 +174,11 @@ def history_record(script, text="", tags=None):
     """Build the compact, role-neutral voice boundary shown to the model."""
     script = str(script or "").strip()
     if script:
-        return f"【声音信 · 内容：{script}】"
+        return f"【语音 · 内容：{script}】"
     text = str(text or "").strip()
     tag_text = ", ".join(
         str(item).strip() for item in (tags or [])
         if str(item).strip() and str(item).strip().lower() not in _MECHANICAL
     )
-    prefix = f"【声音信 · 语气：{tag_text} · 内容：" if tag_text else "【声音信 · 内容："
+    prefix = f"【语音 · 语气：{tag_text} · 内容：" if tag_text else "【语音 · 内容："
     return prefix + text + "】"
