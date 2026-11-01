@@ -31,7 +31,7 @@ body{background:var(--bg);color:var(--cream)}body:before{display:none}.shell{pad
   </section>
 
   <div class="grid">
-    <section class="panel"><div class="panel-title"><h2>今日薪金</h2><span class="tag" id="salaryTag">尚未发薪</span></div><div class="salary-card"><div class="salary-row"><div><strong>¥1.00</strong><p id="salaryHint">等待金主审核今日表现</p></div><button class="btn" id="salaryBtn" onclick="paySalary()">表现合格 · 发薪</button></div></div><div class="quote" id="dailyQuote">这是一份属于你们的日常账本。</div></section>
+    <section class="panel"><div class="panel-title"><h2>今日薪金</h2><span class="tag" id="salaryTag">尚未发薪</span></div><div class="salary-card"><div class="salary-row"><div><strong>¥1.00</strong><p id="salaryHint">等待金主审核今日表现</p></div><button class="btn" id="salaryBtn" onclick="paySalary()">表现合格 · 发薪</button></div></div><div class="quote" id="dailyQuote">把我们的日常，一笔一笔攒成以后。</div></section>
     <section class="panel"><div class="panel-title"><h2>临时赏金</h2><span class="tag">由你授予</span></div><div class="quick"><button class="btn dark" onclick="quickBonus(.5)">+ ¥0.5</button><button class="btn dark" onclick="quickBonus(1)">+ ¥1</button><button class="btn dark" onclick="quickBonus(3)">+ ¥3</button></div><div class="form" style="margin-top:12px"><div class="two"><div class="field"><label>金额</label><input id="bonusAmount" type="number" min="0.01" step="0.01" placeholder="自定义"></div><div class="field"><label>赏金名目</label><input id="bonusNote" maxlength="50" placeholder="例如：干活漂亮"></div></div><button class="btn full" onclick="addBonus()">发放赏金</button></div></section>
   </div>
 
