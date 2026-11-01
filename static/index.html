@@ -3418,14 +3418,14 @@
         <div class="mem-persona-toggle">主页问候</div>
         <form id="greetingForm" class="mem-persona-panel">
           <div><div class="greeting-help" id="greetingModeLabel">轮换方式</div><input type="hidden" id="greetingMode" value="timed"><button class="we-picker-button" type="button" id="greetingModeOpen" aria-labelledby="greetingModeLabel greetingModeText" aria-haspopup="dialog"><span id="greetingModeText">按时段</span></button></div>
-          <div class="greeting-help">每行一句，留空使用默认。每天 05:00–12:00 为早晨，12:00–18:00 为白天，18:00–23:00 为晚上；深夜使用通用句。问候语在本次打开期间保持不变。</div>
+          <div class="greeting-help">每行一句，留空使用默认。按北京时间（UTC+8）：05:00–12:00 为早晨，12:00–18:00 为白天，18:00–23:00 为晚上；23:00–次日05:00 使用通用句。问候语在同一时段内保持不变。</div>
           <div id="greetingTimedFields">
             <label>早晨<textarea id="greetingMorning" maxlength="6000" placeholder="早上好。&#10;今天想聊什么？"></textarea></label>
             <label>白天<textarea id="greetingNoon" maxlength="6000" placeholder="下午好。&#10;想说什么都可以。"></textarea></label>
             <label>晚上<textarea id="greetingEvening" maxlength="6000" placeholder="晚上好。&#10;今天过得怎么样？"></textarea></label>
           </div>
           <label>通用句<textarea id="greetingCommon" maxlength="6000" placeholder="想说什么都可以。&#10;今天想聊什么？"></textarea></label>
-          <div class="greeting-help">随机模式只从通用句中抽取；按时段时，自定义通用句也会加入句池。自定义句子不会自动加称呼，可点击下方按钮插入 {你的名字}。</div>
+          <div class="greeting-help">随机模式只从通用句中抽取；按时段时，通用句仅在深夜使用，不混入其他时段。自定义句子不会自动加称呼，可点击下方按钮插入 {你的名字}。</div>
           <div class="greeting-actions"><button class="mini-btn" id="greetingInsertName" type="button">插入你的名字</button><button class="mini-btn" id="greetingPreviewNext" type="button">换一句预览</button><button class="mini-btn" id="greetingReset" type="button">恢复默认</button></div>
           <div id="greetingPreview" role="status" aria-live="polite"></div>
           <button class="we-save-button" type="submit">保存问候语</button>
@@ -5167,7 +5167,15 @@ const GREET={
 const GREETING_FIELDS={morning:"#greetingMorning",noon:"#greetingNoon",evening:"#greetingEvening",common:"#greetingCommon"};
 const defaultGreetingPrefs=()=>({mode:"timed",morning:"",noon:"",evening:"",common:""});
 let GREETING_PREFS=defaultGreetingPrefs(),greetingsLoaded=false,focusedGreetingField="#greetingCommon";
-let currentGreeting="",greetingSet=false;
+let currentGreeting="",greetingSet=false,greetingTimeBucket="";
+const GREETING_CLOCK=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Shanghai",hour:"2-digit",hourCycle:"h23"});
+function greetingHour(now=new Date()){return Number(GREETING_CLOCK.format(now));}
+function greetingTimeSlot(h){const bucket=greetBucket(h);return bucket==="dawn"?"morning":bucket;}
+function refreshGreetingTime(){
+  if(!greetingSet||!currentGreeting||GREETING_PREFS.mode==="random")return;
+  const slot=greetingTimeSlot(greetingHour());
+  if(greetingTimeBucket&&slot!==greetingTimeBucket){currentGreeting=rollGreeting();renderGreeting();}
+}
 function greetBucket(h){return h<5?"night":h<9?"dawn":h<12?"morning":h<18?"noon":h<23?"evening":"night";}
 const greetingLines=value=>String(value||"").split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
 function greetingPool(prefs,h,longAway=false){
@@ -5177,10 +5185,11 @@ function greetingPool(prefs,h,longAway=false){
   const custom=greetingLines(prefs[field]);
   const base=custom.length?custom:GREET[bucket];
   if(longAway&&!custom.length&&!common.length)return GREET.back;
-  return field==="common"?base:[...base,...common];
+  return base;
 }
 function rollGreeting(longAway=false,prefs=GREETING_PREFS){
-  const pool=greetingPool(prefs,new Date().getHours(),longAway);
+  const h=greetingHour(),pool=greetingPool(prefs,h,longAway);
+  if(prefs===GREETING_PREFS)greetingTimeBucket=greetingTimeSlot(h);
   const alternatives=pool.filter(line=>line!==currentGreeting);
   const choices=alternatives.length?alternatives:pool;
   return choices[Math.floor(Math.random()*choices.length)];
@@ -5201,7 +5210,7 @@ async function loadVisit(){
 function readGreetingForm(){return {mode:$("#greetingMode").value,...Object.fromEntries(Object.entries(GREETING_FIELDS).map(([field,selector])=>[field,$(selector).value]))};}
 function previewGreeting(){
   const prefs=readGreetingForm();
-  const pool=greetingPool(prefs,new Date().getHours());
+  const pool=greetingPool(prefs,greetingHour());
   const line=pool[Math.floor(Math.random()*pool.length)];
   const custom=Object.keys(GREETING_FIELDS).some(field=>greetingLines(prefs[field]).includes(line));
   $("#greetingPreview").textContent=line.replaceAll("{你的名字}",greetingName())+(!custom&&["早上好。","下午好。","晚上好。","欢迎回来。"].includes(line)?greetingName():"");
@@ -5325,11 +5334,12 @@ function tickClock(){
   const date=d.toLocaleDateString("zh-CN",{month:"long",day:"numeric",weekday:"long"});
   $("#dateLine").textContent=date+" · "+homeWeatherText;
 }
-setInterval(()=>{if($("#view-home").classList.contains("active"))tickClock();},1000);
+setInterval(()=>{if($("#view-home").classList.contains("active")){tickClock();refreshGreetingTime();}},1000);
 async function loadHome(){
   tickClock();
   void loadTreasurySummary();
   await Promise.all([loadGreetingSettings(),loadTogetherDate()]);
+  refreshGreetingTime();
   $("#assistantStatus").textContent=assistantName()+"在想你";
   const noteTask=(async()=>{const n=await(await api("/api/notes")).json();homeDisplayedNoteId=n.id??null;homeNoteFixed=!!n.fixed;$("#noteText").textContent=n.content||"（还没有便签）";})();
   await Promise.allSettled([loadVisit(),loadCycleHomeStatus(),loadDiaryHomeStatus(),noteTask,loadWeather(),loadTodos()]);

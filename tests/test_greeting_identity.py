@@ -66,7 +66,7 @@ IDENTITY.user_name='lyre';assert.equal(greetingText('早上好。'),'早上好�
 GREETING_PREFS={...defaultGreetingPrefs(),morning:'早上好。\\nHello {你的名字}',common:'A shared thought'};
 assert.equal(greetingText('早上好。'),'早上好。');
 assert.equal(greetingText('Hello {你的名字}'),'Hello lyre');
-assert.deepEqual(greetingPool(GREETING_PREFS,7,true),['早上好。','Hello {你的名字}','A shared thought']);
+assert.deepEqual(greetingPool(GREETING_PREFS,7,true),['早上好。','Hello {你的名字}']);
 assert.deepEqual(greetingPool(GREETING_PREFS,2),['A shared thought']);
 assert.deepEqual(greetingPool({...GREETING_PREFS,mode:'random'},7),['A shared thought']);
 for(const [hour,bucket] of [[5,'dawn'],[9,'morning'],[12,'noon'],[18,'evening'],[23,'night'],[0,'night']])assert.equal(greetBucket(hour),bucket);
@@ -151,6 +151,29 @@ assert.deepEqual(GREETING_PREFS,defaultGreetingPrefs());
 """
         result = subprocess.run([shutil.which('node'), '-e', script], capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'),'Node unavailable')
+    def test_time_only_pool_boundaries_timezone_and_live_boundary(self):
+        source=Path('static/index.html').read_text(encoding='utf-8')
+        rules=source[source.index('const GREET='):source.index('async function loadVisit()')]
+        script="const assert=require('assert');const $=()=>({});const greetingName=()=>'';"+rules+r"""
+const prefs={mode:'timed',morning:'MORNING',noon:'DAY',evening:'EVENING',common:'NIGHT'};
+for(const [hour,want] of [[0,'NIGHT'],[4,'NIGHT'],[5,'MORNING'],[9,'MORNING'],[11,'MORNING'],[12,'DAY'],[17,'DAY'],[18,'EVENING'],[22,'EVENING'],[23,'NIGHT']])assert.deepEqual(greetingPool(prefs,hour),[want]);
+for(let hour=5;hour<23;hour++)assert.ok(!greetingPool({...prefs,morning:'',noon:'',evening:''},hour).includes('NIGHT'));
+assert.deepEqual(greetingPool({...prefs,mode:'random'},12),['NIGHT']);
+assert.equal(greetingHour(new Date('2026-11-01T20:59:00Z')),4);
+assert.equal(greetingHour(new Date('2026-11-01T21:00:00Z')),5);
+assert.equal(greetingHour(new Date('2026-11-01T15:00:00Z')),23);
+const originalHour=greetingHour;let hour=4;greetingHour=()=>hour;
+GREETING_PREFS=prefs;greetingSet=true;currentGreeting=rollGreeting();assert.equal(currentGreeting,'NIGHT');
+hour=5;refreshGreetingTime();assert.equal(currentGreeting,'MORNING');
+hour=12;refreshGreetingTime();assert.equal(currentGreeting,'DAY');
+hour=18;refreshGreetingTime();assert.equal(currentGreeting,'EVENING');
+hour=23;refreshGreetingTime();assert.equal(currentGreeting,'NIGHT');
+greetingHour=originalHour;
+"""
+        result=subprocess.run([shutil.which('node'),'-e',script],capture_output=True,text=True,encoding='utf-8')
+        self.assertEqual(result.returncode,0,result.stderr)
 
     def test_greeting_pool_has_no_private_defaults(self):
         source = Path('static/index.html').read_text(encoding='utf-8')
