@@ -230,7 +230,7 @@ def probe(url, timeout=20, access_token=""):
             raise MCPError(f"自动连接失败：{first}；SSE：{second}") from second
 
 
-def call_tool(url, name, arguments=None, timeout=30, access_token=""):
+def call_tool(url, name, arguments=None, timeout=90, access_token=""):
     result, transport = call(
         url, "tools/call", {"name": name, "arguments": arguments or {}}, timeout, access_token
     )

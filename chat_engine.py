@@ -57,6 +57,21 @@ ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4096"))
 # leave room under max_tokens for the actual answer).
 ANTHROPIC_THINK_BUDGET = int(os.environ.get("ANTHROPIC_THINK_BUDGET", "2048"))
 
+# 聊天输出的硬上限。不发 max_tokens 时上游默认能吐 6.5 万 token：
+# 模型一旦退化成复读机，就会一直输出乱码直到打满上限。
+CHAT_MAX_TOKENS = int(os.environ.get("CHAT_MAX_TOKENS", "8192"))
+# 失控检测：正文太长，或结尾出现同一段连续重复，就主动停。
+REPLY_MAX_CHARS = int(os.environ.get("REPLY_MAX_CHARS", "24000"))
+REPLY_REPEAT_WINDOW = int(os.environ.get("REPLY_REPEAT_WINDOW", "240"))
+REPLY_REPEAT_TIMES = int(os.environ.get("REPLY_REPEAT_TIMES", "6"))
+
+# 聊天上下文：前端选择"无限制"时也用这个默认值，且不超过上限。
+# 只影响发给模型的窗口，界面上仍然能看到全部历史。
+CHAT_CONTEXT_LIMIT = int(os.environ.get("CHAT_CONTEXT_LIMIT", "50"))
+CHAT_CONTEXT_MAX = int(os.environ.get("CHAT_CONTEXT_MAX", "120"))
+# 窗口内图片的总预算；超出时从最旧的开始不带。
+CHAT_IMAGE_BUDGET_BYTES = int(os.environ.get("CHAT_IMAGE_BUDGET_BYTES", str(8 * 1024 * 1024)))
+
 # ---------------------------------------------------------------------------
 # This neutral first-run persona is intentionally generic. Customize it from
 # the Memory screen after signing in; the database value then takes priority.
@@ -745,11 +760,23 @@ def _filter_image_attachments(message_id, attachments, allowed_image_keys):
     return out
 
 
+def _normalise_context_limit(value):
+    """把前端的上下文设置收进安全范围：无限制 → 默认 50，最多 120。"""
+    try:
+        limit = int(value) if value not in (None, "", "unlimited") else 0
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0:
+        return CHAT_CONTEXT_LIMIT
+    return min(limit, CHAT_CONTEXT_MAX)
+
+
 def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
-    if not latest_images_only and image_limit is None:
-        return None
     allowed = set()
     remaining = image_limit
+    budget = max(0, CHAT_IMAGE_BUDGET_BYTES)
+    used = 0
+    trimmed = False
     for r in reversed(rows):
         if r["role"] != "user" or not r["attachments"]:
             continue
@@ -757,22 +784,33 @@ def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
             attachments = json.loads(r["attachments"])
         except (TypeError, ValueError):
             attachments = []
-        image_indices = [
-            i for i, a in enumerate(
-                [a for a in attachments if isinstance(a, dict) and a.get("type") == "image"]
-            )
-        ]
+        images = [a for a in attachments if isinstance(a, dict) and a.get("type") == "image"]
+        image_indices = list(range(len(images)))
         if not image_indices:
             continue
         if latest_images_only:
             return {(r["id"], i) for i in image_indices}
         for i in reversed(image_indices):
-            if remaining is None or remaining <= 0:
+            if remaining is not None and remaining <= 0:
+                trimmed = True
+                break
+            try:
+                size = int(images[i].get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            if budget and used + size > budget:
+                trimmed = True      # 预算用完，这张和更旧的都不带
                 break
             allowed.add((r["id"], i))
-            remaining -= 1
+            used += size
+            if remaining is not None:
+                remaining -= 1
+        if trimmed:
+            break
         if remaining is not None and remaining <= 0:
             break
+    if not trimmed and image_limit is None:
+        return None                 # 没有裁剪，保持原来的"全部图片"行为
     return allowed
 
 
@@ -1135,8 +1173,8 @@ class _ThinkSplitter:
     # 中转站会把独白直接写进正文，标记形式五花八门：前面可能粘着乱字符
     # （𝝿思考过程 / 지이thinking / hthought），语言也可能是俄语、韩语。
     MARKER_RE = re.compile(
-        r"(?:🧠|💭|thinking\s*process|thought\s*process|thinking\w*|thought\w*|"
-        r"reasoning\w*|思考过程|思考|分析|мысл\w*|생각\w*)",
+        r"(?:🫧\s*(?:thought|thinking|reasoning|思考)\w*|🧠|💭|thinking\s*process|"
+        r"thought\s*process|thinking\w*|thought\w*|reasoning\w*|思考过程|思考|分析|мысл\w*|생각\w*)",
         re.IGNORECASE,
     )
     MARKER_WINDOW = 100      # 只在开头这段里找，避免正文深处误伤
@@ -1149,6 +1187,12 @@ class _ThinkSplitter:
     )
     TAIL_WINDOW = 200        # 计划句到句号的最长跨度
     CJK = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+    # 中文计划句：单独占一行时，下一行就是正文，不必等到空行。
+    PLANNING_RE = re.compile(
+        r"(保持短气泡|气泡要短|一句一换|一句一行|别用括号|不要用括号|不加括号|"
+        r"不用引号|不要引号|不加引号|控制在\s*\d+\s*字|别太长|短句为主|分气泡)",
+        re.IGNORECASE,
+    )
     # 有些独白没有开头标记，只以一个 "]正文" 收尾；这类只能先缓冲一段再判断。
     BRACKET_WINDOW = int(os.environ.get("THINK_BRACKET_WINDOW", "280"))
     BRACKET_MIN = 60         # 折叠掉的内容太少就不值得切
@@ -1161,6 +1205,7 @@ class _ThinkSplitter:
         self.marker_think = False
         self.pending_think = None
         self.marker_close = ""
+        self.pre_reasoning = ""
 
     def _find_marker(self, text):
         """返回 (start, end)；标记必须靠近行首，且前面的杂字符不超过阈值。"""
@@ -1173,14 +1218,18 @@ class _ThinkSplitter:
                 continue
             token = match.group(0)
             after = text[match.end(): match.end() + 4].lstrip(" \t")
-            if token in ("🧠", "💭"):
-                return match.start(), match.end()
+            if token.startswith("🫧") or token in ("🧠", "💭"):
+                return match.start(), match.end()   # 🫧thought 是思考标记
             if "process" in token.lower():
                 return match.start(), match.end()
             if not after:
                 continue          # 等更多字符再判断，别在半个词上定案
             if after[0] in ":：\n":
                 return match.start(), match.end()
+            # 「思考过程（第一人称）：」这类中间夹着括注的写法
+            parenthetical = re.match(r"[（(][^）)\n]{0,20}[）)][ \t]*[:：]", text[match.end():])
+            if parenthetical:
+                return match.start(), match.end() + parenthetical.end()
         return None
 
     def _decide_marker(self):
@@ -1192,6 +1241,16 @@ class _ThinkSplitter:
             self.buf = text
             return
         start, end = span
+        token = text[start:end].strip()
+        if start > 0 and token in ("🧠", "💭"):
+            # 她的写法：先几行独白，再用 🧠 引出真正要说的话。
+            # 这时标记前面是思考，标记后面才是正文。
+            self.pre_reasoning = text[:start]
+            self.buf = text[end:].lstrip(" \t\r\n")
+            self.pending_think = None
+            self.in_think = False
+            self.marker_think = False
+            return
         head = text[:start]              # 标记之前的内容照常显示，不吞
         head_trimmed = head.rstrip(" \t-—:：")
         if head_trimmed.endswith("["):
@@ -1248,6 +1307,10 @@ class _ThinkSplitter:
         for index, char in enumerate(text):
             if char not in "]】":
                 continue
+            opening = "[" if char == "]" else "【"
+            # 成对的【标签】是正文里的强调，不是独白结束符
+            if text.count(opening, 0, index) > text.count(char, 0, index):
+                continue
             before = text[index - 1] if index else ""
             if before and not (self.CJK.match(before) or before in "。！？…」』）)"):
                 continue          # 引用编号 [1] / 数组下标 arr[0] 之类排除掉
@@ -1281,6 +1344,32 @@ class _ThinkSplitter:
         )
         if match and not any(char in self.KEEP_PREFIX for char in match.group(1)):
             self.buf = self.buf[len(match.group(1)):]
+
+    def _bubble_cut(self, text):
+        """思考态里，独占行首的 🫧 标志正文开始（🫧thought 属于思考标记，跳过）。"""
+        index = text.find("🫧")
+        while index >= 0:
+            line_start = text.rfind("\n", 0, index) + 1
+            if not text[line_start:index].strip():
+                rest = text[index + 1:].lstrip(" \t")
+                if rest and not rest[:12].lower().startswith(
+                        ("thought", "thinking", "reasoning", "思考")):
+                    return index
+            index = text.find("🫧", index + 1)
+        return None
+
+    def _planning_cut(self, text):
+        """中文计划句独占一行时，行尾就是思考的终点（下一行是正文）。"""
+        best = None
+        for match in self.PLANNING_RE.finditer(text):
+            line_end = text.find("\n", match.end())
+            if line_end < 0:
+                continue
+            following = text[line_end + 1:].lstrip(" \t")
+            if not following or not self.CJK.match(following):
+                continue
+            best = line_end + 1
+        return best
 
     @staticmethod
     def _first(s, tags):
@@ -1321,6 +1410,9 @@ class _ThinkSplitter:
                 tail = self._tail_cut(self.buf)
                 if tail:
                     cuts.append(tail)
+                planning = self._planning_cut(self.buf)
+                if planning:
+                    cuts.append(planning)
                 if cuts:
                     cut = max(cuts)
                     pre, self.buf = self.buf[:cut], self.buf[cut:]
@@ -1334,6 +1426,9 @@ class _ThinkSplitter:
         if self.decided and not self.in_think:
             self._drop_decoration()
         out = []
+        if self.pre_reasoning:
+            out.append(("reasoning", self.pre_reasoning))
+            self.pre_reasoning = ""
         if pre:
             out.append(("reasoning", pre))
         if self.pending_think is not None:
@@ -1360,6 +1455,26 @@ class _ThinkSplitter:
                     self.in_think = False
                     self.marker_think = False
                     self.marker_close = ""
+                    self._drop_decoration()
+                    continue
+                # 独白里独占行首的 🫧 是气泡起点：它后面全是正文
+                bubble_cut = self._bubble_cut(self.buf)
+                if bubble_cut is not None:
+                    if bubble_cut > 0:
+                        out.append(("reasoning", self.buf[:bubble_cut]))
+                    self.buf = self.buf[bubble_cut:]
+                    self.in_think = False
+                    self.marker_think = False
+                    self._drop_decoration()
+                    continue
+                # 中文计划句独占一行：下一行就是正文，别等空行把它也吞掉
+                planning_cut = self._planning_cut(self.buf)
+                if planning_cut is not None:
+                    if planning_cut > 0:
+                        out.append(("reasoning", self.buf[:planning_cut]))
+                    self.buf = self.buf[planning_cut:]
+                    self.in_think = False
+                    self.marker_think = False
                     self._drop_decoration()
                     continue
                 # 先看是不是「英文计划句 → 紧跟中文正文」收尾
@@ -1543,6 +1658,10 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
             p for p in (system_sections.get("volatile"), str(volatile_extra).strip()) if p
         )
     system = "\n\n".join(p for p in (system_sections["stable"], system_sections["volatile"]) if p)
+    tool_index_block = tools.chat_tool_index_block()
+    if tool_index_block:
+        system = system + "\n\n" + tool_index_block
+    context_limit = _normalise_context_limit(context_limit)
     history = get_history(
         session_id,
         limit=context_limit,
@@ -1582,7 +1701,7 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
             closing_prompt=closing_prompt,
             round_observer=round_observer,
             max_elapsed_seconds=max_elapsed_seconds,
-            base_tool_definitions=(tools.openai_tools(mcp_server_ids) if allow_tools else []),
+            base_tool_definitions=(tools.chat_tool_definitions(mcp_server_ids, allow_tools)),
             cache_profile=anthropic_cache_profile,
         )
     else:
@@ -1595,7 +1714,7 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
             closing_prompt=closing_prompt,
             round_observer=round_observer,
             max_elapsed_seconds=max_elapsed_seconds,
-            base_tool_definitions=(tools.openai_tools(mcp_server_ids) if allow_tools else []),
+            base_tool_definitions=(tools.chat_tool_definitions(mcp_server_ids, allow_tools)),
         )
 
 
@@ -1618,7 +1737,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
     tool_definitions = None
     if base_tool_definitions is not None or extra_tools:
         tool_definitions = list(
-            base_tool_definitions if base_tool_definitions is not None else tools.openai_tools()
+            base_tool_definitions if base_tool_definitions is not None else tools.chat_tool_definitions()
         ) + list(extra_tools or [])
     stripped_once = False
     active_rounds = max(1, int(max_tool_rounds or MAX_TOOL_ROUNDS))
@@ -1689,8 +1808,8 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
                 args = json.loads(c["arguments"] or "{}")
             except ValueError:
                 args = {}
-            narr = (extra_narrations or {}).get(c["name"]) or tools.narrate(c["name"])
-            yield ("tool_start", {"tool": c["name"], "narrate": narr, "args": args})
+            narr = (extra_narrations or {}).get(c["name"]) or tools.narrate(c["name"], args)
+            yield ("tool_start", {"tool": c["name"], "display_tool": tools.display_name(c["name"], args), "narrate": narr, "args": args})
             outcome = (
                 extra_executor(c["name"], args, session_id)
                 if extra_executor else None
@@ -1700,7 +1819,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
             else:
                 turn_tools.invalidate()
             result = outcome["content"]
-            event = {"tool": c["name"], "display_tool": outcome.get("tool", c["name"]),
+            event = {"tool": c["name"], "display_tool": tools.display_name(c["name"], args),
                      "narrate": narr+("（复用本轮读取）" if outcome.get("_read_reused") else ""), "args": args, "result": result,
                      "ok": outcome["ok"], "error": outcome["error"],
                      "duration_ms": outcome["duration_ms"],
@@ -1734,7 +1853,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
     messages.append({"role": "user", "content": reminder})
     closing_names = set(closing_tool_names)
     closing_definitions = [
-        item for item in (tool_definitions or tools.openai_tools())
+        item for item in (tool_definitions or tools.chat_tool_definitions())
         if item.get("function", {}).get("name") in closing_names
     ]
     yield ("model_round_start", {"round": closing_round, "closing": True})
@@ -1760,15 +1879,15 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
             args = json.loads(c["arguments"] or "{}")
         except ValueError:
             args = {}
-        narr = (extra_narrations or {}).get(c["name"]) or tools.narrate(c["name"])
-        yield ("tool_start", {"tool": c["name"], "narrate": narr, "args": args})
+        narr = (extra_narrations or {}).get(c["name"]) or tools.narrate(c["name"], args)
+        yield ("tool_start", {"tool": c["name"], "display_tool": tools.display_name(c["name"], args), "narrate": narr, "args": args})
         outcome = extra_executor(c["name"], args, session_id) if extra_executor else None
         if outcome is None:
             outcome = turn_tools.execute(c["name"], args, session_id, tools.execute)
         else:
             turn_tools.invalidate()
         yield ("tool_result", {
-            "tool": c["name"], "display_tool": outcome.get("tool", c["name"]),
+            "tool": c["name"], "display_tool": tools.display_name(c["name"], args),
             "narrate": narr, "args": args, "result": outcome["content"],
             "ok": outcome["ok"], "error": outcome["error"],
             "duration_ms": outcome["duration_ms"], "source": outcome["source"],
@@ -1784,7 +1903,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
 def _anthropic_tool_schemas(openai_definitions=None):
     """Translate the shared OpenAI-style registry to Anthropic tool schemas."""
     out = []
-    for item in (openai_definitions if openai_definitions is not None else tools.openai_tools()):
+    for item in (openai_definitions if openai_definitions is not None else tools.chat_tool_definitions()):
         fn = item.get("function") if isinstance(item, dict) else None
         if not isinstance(fn, dict) or not fn.get("name"):
             continue
@@ -1816,7 +1935,7 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
         return
 
     tool_definitions = list(
-        base_tool_definitions if base_tool_definitions is not None else tools.openai_tools()
+        base_tool_definitions if base_tool_definitions is not None else tools.chat_tool_definitions()
     ) + list(extra_tools or [])
     tool_schemas = _anthropic_tool_schemas(tool_definitions) if tool_definitions else None
     cache_history_messages = (
@@ -1873,8 +1992,8 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
         for call in tool_calls:
             name = call.get("name") or ""
             args = call.get("input") if isinstance(call.get("input"), dict) else {}
-            narr = (extra_narrations or {}).get(name) or tools.narrate(name)
-            yield ("tool_start", {"tool": name, "narrate": narr, "args": args})
+            narr = (extra_narrations or {}).get(name) or tools.narrate(name, args)
+            yield ("tool_start", {"tool": name, "display_tool": tools.display_name(name, args), "narrate": narr, "args": args})
             outcome = (
                 extra_executor(name, args, session_id)
                 if extra_executor else None
@@ -1886,7 +2005,7 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
             result = outcome["content"]
             event = {
                 "tool": name,
-                "display_tool": outcome.get("tool", name),
+                "display_tool": tools.display_name(name, args),
                 "narrate": narr+("（复用本轮读取）" if outcome.get("_read_reused") else ""),
                 "args": args,
                 "result": result,
@@ -1965,15 +2084,15 @@ def _run_anthropic_tool_loop(base_url, api_key, model, system_sections, history,
     for call in closing_calls:
         name = call.get("name") or ""
         args = call.get("input") if isinstance(call.get("input"), dict) else {}
-        narr = (extra_narrations or {}).get(name) or tools.narrate(name)
-        yield ("tool_start", {"tool": name, "narrate": narr, "args": args})
+        narr = (extra_narrations or {}).get(name) or tools.narrate(name, args)
+        yield ("tool_start", {"tool": name, "display_tool": tools.display_name(name, args), "narrate": narr, "args": args})
         outcome = extra_executor(name, args, session_id) if extra_executor else None
         if outcome is None:
             outcome = turn_tools.execute(name, args, session_id, tools.execute)
         else:
             turn_tools.invalidate()
         yield ("tool_result", {
-            "tool": name, "display_tool": outcome.get("tool", name),
+            "tool": name, "display_tool": tools.display_name(name, args),
             "narrate": narr, "args": args, "result": outcome["content"],
             "ok": outcome["ok"], "error": outcome["error"],
             "duration_ms": outcome["duration_ms"], "source": outcome["source"],
@@ -2166,16 +2285,35 @@ def _gemini_safety_settings():
         "HARM_CATEGORY_CIVIC_INTEGRITY")]
 
 
+def _looks_like_runaway(text):
+    """回复失控的迹象：太长、替换字符过多，或结尾在重复同一段文字。"""
+    if len(text) > REPLY_MAX_CHARS:
+        return True
+    if text.count("\ufffd") > 200:
+        return True
+    tail = text[-REPLY_REPEAT_WINDOW:]
+    for size in (8, 12, 16, 24, 40):
+        if len(tail) < size * REPLY_REPEAT_TIMES:
+            continue
+        unit = tail[-size:]
+        if not unit.strip():
+            continue
+        if tail.endswith(unit * REPLY_REPEAT_TIMES):
+            return True
+    return False
+
+
 def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta,
                         tool_definitions=None):
     """One streaming round. Yields ("reasoning"|"delta", text) for streamed
     content; returns (content_text, tool_calls) where tool_calls is a list of
     {id, name, arguments(JSON str)} accumulated from the stream (empty if none)."""
     payload = {"model": model, "messages": _compat_prompt_messages(_bounded_tool_context(messages)), "stream": True,
-               "stream_options": {"include_usage": True}}
+               "stream_options": {"include_usage": True},
+               "max_tokens": CHAT_MAX_TOKENS}
     if "gemini" in model.lower():
         payload["safetySettings"] = _gemini_safety_settings()
-    resolved_tools = tool_definitions if tool_definitions is not None else tools.openai_tools()
+    resolved_tools = tool_definitions if tool_definitions is not None else tools.chat_tool_definitions()
     if resolved_tools:
         payload["tools"] = resolved_tools
     if think:
@@ -2218,8 +2356,12 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
         if _looks_like_image_type_error(resp.status_code, raw_detail):
             yield ("retry_text_only", detail)
             return "", [], None
-        if "stream_options" in raw_detail:
+        if "stream_options" in raw_detail or (
+                resp.status_code in (400, 422) and "max_tokens" in raw_detail):
+            # 有些中转不认这两个参数；去掉后重试一次，别直接报错。
             payload.pop("stream_options", None)
+            if resp.status_code in (400, 422) and "max_tokens" in raw_detail:
+                payload.pop("max_tokens", None)
             req_bytes = _payload_size(payload)
             started = time.monotonic()
             try:
@@ -2263,6 +2405,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
     tcs = {}  # index -> {id, name, arguments}
     saw_terminal = False
     saw_output = False
+    runaway = False
     try:
         for line in _sse_lines(resp):
             line = line.strip()
@@ -2327,6 +2470,9 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
                     saw_output = True
                 if fn.get("arguments"):
                     slot["arguments"] += fn["arguments"]
+            if _looks_like_runaway("".join(content_parts)):
+                runaway = True
+                break
     except (requests.RequestException, OSError) as e:
         _log_http_request(
             provider_meta, model, endpoint, False, status_code=resp.status_code,
@@ -2341,6 +2487,12 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
             yield (kind, text)
         yield ("error", {"status": resp.status_code, "message": str(e)})
         return "", [], usage
+    if runaway:
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001 — 关连接失败不影响已经拿到的内容
+            pass
+        yield ("error", {"status": 200, "message": "回复疑似失控（重复或过长），已中止"})
     for kind, text in rsplitter.flush():
         yield (kind, text)
     for kind, text in csplitter.flush():
@@ -2667,6 +2819,7 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
     usage = {}
     blocks = {}
     saw_terminal = False
+    runaway = False
     try:
         for line in _sse_lines(resp):
             line = line.strip()
@@ -2727,6 +2880,11 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
                     block["text"] = block.get("text", "") + delta["text"]
                     for kt in csplitter.feed(delta["text"]):
                         yield kt
+                    if _looks_like_runaway("".join(
+                            item.get("text", "") for item in blocks.values()
+                            if isinstance(item, dict))):
+                        runaway = True
+                        break
                 elif dtype == "thinking_delta" and delta.get("thinking"):
                     block = blocks.setdefault(
                         index, {"type": "thinking", "thinking": "", "signature": ""}
@@ -2783,6 +2941,12 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
             yield kt
         yield ("error", {"status": resp.status_code, "message": str(e)})
         return [], [], usage or None
+    if runaway:
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001
+            pass
+        yield ("error", {"status": 200, "message": "回复疑似失控（重复或过长），已中止"})
     for kt in csplitter.flush():
         yield kt
     for kt in rsplitter.flush():

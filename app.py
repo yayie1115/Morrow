@@ -32,8 +32,8 @@ from flask import (
     g,
     jsonify,
     request,
-    send_from_directory,
     send_file,
+    send_from_directory,
     session,
 )
 from werkzeug.utils import secure_filename
@@ -3713,7 +3713,7 @@ _active_chat_requests_lock = threading.Lock()
 # 的观察者。客户端断开 → 观察者结束，生成继续；客户端回来 → 重新观察或直接
 # 从数据库读到已经收好的回复。显式点“停止”才会取消这一轮。
 # ---------------------------------------------------------------------------
-_LIVE_REPLY_TTL = 300            # 结束后保留事件流，留给晚到/重连的客户端
+_LIVE_REPLY_TTL = 1800            # 结束后保留事件流，留给晚到/重连的客户端
 _live_replies = {}               # session_id -> _LiveReply
 _live_replies_lock = threading.Lock()
 
@@ -4341,12 +4341,27 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             daemon=True,
             name=f"nook-push-{msg_id}",
         ).start()
+        threading.Thread(
+            target=_background_bark_delivery,
+            args=(session_id, msg_id, push_text, "message", push_event["id"],
+                  PUSH_FOREGROUND_GRACE_SECONDS),
+            daemon=True,
+            name=f"nook-bark-{msg_id}",
+        ).start()
     if not partial_error and vision_source_msg_id:
         threading.Thread(
             target=_background_post_reply,
             args=(vision_source_msg_id, session_id, False, observed_context_tokens),
             daemon=True,
             name=f"nook-after-reply-{session_id}",
+        ).start()
+    if not partial_error:
+        # 每轮回复落库后检查一次摘要检查点；阈值不到会立刻返回。
+        threading.Thread(
+            target=_background_auto_compression,
+            args=(session_id, observed_context_tokens),
+            daemon=True,
+            name=f"nook-auto-compress-{session_id}",
         ).start()
 
     done_payload = {
@@ -5069,6 +5084,56 @@ def _create_push_event(db, session_id, message_id, kind):
         (token, str(kind or "message")[:40], int(session_id), message_id, expires_at),
     )
     return {"id": cur.lastrowid, "token": token, "expires_at": expires_at}
+
+
+BARK_BASE = os.environ.get("BARK_URL", "").rstrip("/")
+BARK_GROUP = os.environ.get("BARK_GROUP", "")
+BARK_MAX_LINES = 8
+
+
+def _bark_assistant_name(db):
+    try:
+        row = db.execute("SELECT value FROM settings WHERE key='identity_assistant_name'").fetchone()
+        return (row[0] if row and row[0] else "TA")
+    except Exception:
+        return "TA"
+
+
+def _background_bark_delivery(session_id, message_id, text, kind="message",
+                              event_id=None, delay_seconds=0):
+    """把一轮回复按行拆开，逐条推到 Bark；前台已读则整轮跳过。"""
+    base = BARK_BASE
+    if not base:
+        return
+    if delay_seconds:
+        time.sleep(delay_seconds)
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    try:
+        if event_id is not None:
+            row = db.execute("SELECT status FROM push_notification_events WHERE id=?",
+                             (event_id,)).fetchone()
+            # 只有"真的被读过/认领"才跳过；页面只是显示过（suppressed）仍然推送，
+            # 否则手机锁屏/页面挂在后台时，半夜的消息早上就读不到了。
+            if row is not None and row["status"] in ("read", "claimed", "shown"):
+                return
+        name = _bark_assistant_name(db)
+    finally:
+        db.close()
+    lines = [line.strip() for line in re.split(r"\n+", text or "") if line.strip()]
+    if not lines:
+        return
+    if len(lines) > BARK_MAX_LINES:
+        head, tail = lines[:BARK_MAX_LINES - 1], " ".join(lines[BARK_MAX_LINES - 1:])
+        lines = head + [tail]
+    group = BARK_GROUP or name
+    for line in lines:
+        try:
+            requests.get("%s/%s/%s" % (base, quote(name), quote(line)),
+                         params={"group": group, "ttl": 86400}, timeout=6)
+        except Exception:
+            app.logger.warning("Bark push failed for message %s", message_id, exc_info=True)
+            return
 
 
 def _background_push_delivery(session_id, message_id, message, kind="message",
@@ -5926,6 +5991,42 @@ def _selected_ombre_server_id(db):
     return 0, rows
 
 
+@app.get("/api/tool-index")
+@require_auth
+def get_tool_index():
+    config = tools.load_tool_index()
+    return jsonify({"mode": config["mode"],
+                    "allow": config["allow"], "deny": config["deny"],
+                    "tools": tools.tool_catalog(config),
+                    "groups": tools.tool_groups(config)})
+
+
+@app.put("/api/tool-index")
+@require_auth
+def put_tool_index():
+    data = request.get_json(silent=True) or {}
+    saved = tools.save_tool_index({
+        "mode": data.get("mode"),
+        "allow": data.get("allow") or [],
+        "deny": data.get("deny") or [],
+    })
+    return jsonify({"ok": True, **saved,
+                    "tools": tools.tool_catalog(saved),
+                    "groups": tools.tool_groups(saved)})
+
+
+@app.post("/api/tool-index/group")
+@require_auth
+def post_tool_index_group():
+    data = request.get_json(silent=True) or {}
+    key = str(data.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "缺少分组"}), 400
+    config = tools.set_tool_group(key, bool(data.get("enabled")))
+    return jsonify({"ok": True, **config,
+                    "tools": tools.tool_catalog(config),
+                    "groups": tools.tool_groups(config)})
+
 @app.get("/api/providers")
 @require_auth
 def list_providers():
@@ -6474,6 +6575,37 @@ def _background_post_reply(message_id, session_id, run_compression, observed_con
         _background_image_descriptions(message_id)
     if run_compression:
         _background_auto_compression(session_id, observed_context_tokens)
+
+
+def _background_auto_compression(session_id, observed_context_tokens=0):
+    """Reply is saved: advance the summary checkpoint when the thresholds are met."""
+    try:
+        with app.app_context():
+            db = get_db()
+            config = _auto_compression_settings(db)
+            if not config["enabled"] or session_id not in config["session_ids"]:
+                return
+            if str(session_id) in (config.get("paused_sessions") or {}):
+                return
+            result = _run_compression(
+                session_id,
+                source="auto",
+                recent_count=config["recent_message_count"],
+                target_tokens=config["target_tokens"],
+                instruction=config.get("instruction", ""),
+                threshold_messages=config["threshold_messages"],
+                threshold_tokens=config["threshold_tokens"],
+                min_batch_tokens=config.get("min_batch_tokens", 0),
+                observed_context_tokens=observed_context_tokens,
+            )
+            if isinstance(result, dict) and not result.get("skipped"):
+                app.logger.info(
+                    "auto compression covered %s messages for session %s",
+                    result.get("newly_compressed_count"), session_id,
+                )
+    except Exception:
+        # 压缩失败不能影响聊天本身，只记日志。
+        app.logger.exception("auto compression failed for session %s", session_id)
 
 
 @app.get("/api/vision-status")

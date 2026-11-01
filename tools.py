@@ -2242,6 +2242,8 @@ def openai_tools(mcp_server_ids=None):
         return value
     out = []
     for name, (_fn, _narr, spec) in _REGISTRY.items():
+        if name in TOOL_INDEX_META:
+            continue
         out.append({"type": "function", "function": {
             "name": name,
             "description": display(spec["description"]),
@@ -2249,6 +2251,27 @@ def openai_tools(mcp_server_ids=None):
         }})
     out.extend(_openai_mcp_tools(mcp_server_ids))
     return out
+
+
+def display_name(name, args=None):
+    """索引模式下真正执行的是 tool_call，回执要显示被调用的那个工具。"""
+    if name == "tool_call" and isinstance(args, dict):
+        inner = str(args.get("name") or "").strip()
+        if inner:
+            return inner
+    return name
+
+
+def _brand_name():
+    """界面文案里的自称：跟随设置里的助手名。"""
+    try:
+        with _connect() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='identity_assistant_name'").fetchone()
+            if row and row[0]:
+                return str(row[0])
+    except Exception:
+        pass
+    return "Morrow"
 
 
 def _treasury_narration(name):
@@ -2259,17 +2282,355 @@ def _treasury_narration(name):
     return identity.get_identity(db_path=DB_PATH)["assistant_name"] + suffix
 
 
-def narrate(name):
-    treasury_text = _treasury_narration(name)
+def narrate(name, args=None):
+    target = display_name(name, args)
+    treasury_text = _treasury_narration(target)
     if treasury_text is not None:
         return treasury_text
-    if name.startswith("mcp_"):
-        server, _tool = _find_mcp_tool(name)
+    if target.startswith("mcp_"):
+        server, _tool = _find_mcp_tool(target)
         if server:
-            return server["narrate"] or f"Morrow正在请 {server['name']} 帮忙"
-        return "Morrow正在请外面的朋友帮忙"
+            return server["narrate"] or f"{_brand_name()}正在请 {server['name']} 帮忙"
+        return f"{_brand_name()}正在请外面的朋友帮忙"
+    item = _REGISTRY.get(target)
+    return item[1] if item else f"{_brand_name()}在忙活着"
+
+
+def _failed_text(value):
+    """兼容现有内置工具用括号文本表达的可预期失败。"""
+    if not isinstance(value, str) or not value.startswith("（"):
+        return False
+    return any(mark in value for mark in (
+        "失败", "出错", "没找到", "没有给", "没法", "需要", "只能", "最多",
+        "还没配置", "缺 ",
+    ))
+
+
+def execute(name, args, session_id=None):
+    """执行工具并返回统一结果；content 仍可直接喂回模型。"""
+    started = time.perf_counter()
+    if name.startswith("mcp_"):
+        server, tool = _find_mcp_tool(name)
+        if not server:
+            error = "这个 MCP 工具不存在或已停用。"
+            return {"ok": False, "content": f"（{error}）", "error": error, "duration_ms": 0,
+                    "source": "mcp", "server": "" , "tool": name}
+        try:
+            content, _transport = mcp_client.call_tool(
+                server["url"], tool["name"], args or {}, access_token=server["access_token"]
+            )
+            ok, error = True, "";_set_mcp_status(server["id"], True)
+        except Exception as e:  # noqa: BLE001
+            error = str(e) or type(e).__name__;content = f"（MCP 工具 {tool['name']} 调用失败：{error}）";ok = False;_set_mcp_status(server["id"], False, error)
+        return {"ok": ok, "content": content, "error": error,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+                "source": "mcp", "server": server["name"], "tool": tool["name"],
+                "tool_meta": _mcp_tool_snapshot(server, tool)}
     item = _REGISTRY.get(name)
-    return item[1] if item else "Morrow在忙活着"
+    if not item:
+        error = f"没有名为 {name} 的工具。"
+        return {"ok": False, "content": f"（{error}）", "error": error,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+                "source": "builtin", "server": ""}
+    try:
+        content = str(item[0](args or {}, session_id))
+    except Exception as e:  # noqa: BLE001
+        error = str(e) or type(e).__name__
+        content = f"（工具 {name} 执行出错：{error}）"
+        ok = False
+    else:
+        ok = not _failed_text(content)
+        error = content.strip("（）") if not ok else ""
+    return {"ok": ok, "content": content, "error": error,
+            "duration_ms": round((time.perf_counter() - started) * 1000),
+            "source": "builtin", "server": ""}
+
+
+
+# ---------------------------------------------------------------------------
+# 工具索引：目录常驻，完整参数按需展开（Index → tool_show → tool_call）
+# ---------------------------------------------------------------------------
+TOOL_INDEX_KEY = "tool_index"
+BUILTIN_GROUP_ORDER = ("便签", "待办", "闹钟与天气", "记忆", "亲密与周期", "手记", "留影", "音乐", "其他")
+_BUILTIN_GROUPS = {
+    "read_note": "便签", "write_note": "便签",
+    "read_todos": "待办", "add_todo": "待办", "complete_todo": "待办",
+    "delete_todo": "待办", "update_todo": "待办",
+    "set_alarm": "闹钟与天气", "cancel_alarm": "闹钟与天气", "get_weather": "闹钟与天气",
+    "write_memory": "记忆", "update_memory": "记忆", "delete_memory": "记忆",
+    "add_dynamic_memory": "记忆", "update_dynamic_memory": "记忆",
+    "delete_dynamic_memory": "记忆",
+    "get_cycle_status": "亲密与周期", "update_cycle_status": "亲密与周期",
+    "get_intimacy_log": "亲密与周期", "add_intimacy_log": "亲密与周期",
+    "update_intimacy_log": "亲密与周期", "reply_to_intimacy_log": "亲密与周期",
+    "browse_kept": "手记", "read_kept": "手记", "read_kept_by_date": "手记",
+    "write_kept": "手记", "reply_kept": "手记", "search_kept": "手记",
+    "read_room_day": "手记",
+    "browse_keepsakes": "留影", "search_keepsakes": "留影", "read_keepsake": "留影",
+    "reply_keepsake": "留影", "read_keepsake_candidates": "留影", "create_keepsake": "留影",
+    "search_music": "音乐", "choose_music": "音乐", "read_music_lyrics": "音乐",
+    "browse_music_favorites": "音乐", "music_song_notes": "音乐", "favorite_music": "音乐",
+}
+TOOL_INDEX_META = ("tool_show", "tool_call")
+
+
+def _group_of(name):
+    return _BUILTIN_GROUPS.get(name, "其他")
+
+
+def load_tool_index():
+    raw = _setting(TOOL_INDEX_KEY, "")
+    try:
+        value = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        value = {}
+    if not isinstance(value, dict):
+        value = {}
+    allow = [item for item in (value.get("allow") or []) if isinstance(item, str)]
+    deny = [item for item in (value.get("deny") or []) if isinstance(item, str)]
+    return {"mode": "on" if str(value.get("mode") or "") == "on" else "off",
+            "allow": allow, "deny": deny}
+
+
+def save_tool_index(value):
+    payload = {
+        "mode": "on" if str((value or {}).get("mode") or "") == "on" else "off",
+        "allow": sorted({item for item in (value or {}).get("allow") or [] if isinstance(item, str)}),
+        "deny": sorted({item for item in (value or {}).get("deny") or [] if isinstance(item, str)}),
+    }
+    conn = _connect()
+    conn.execute(
+        "INSERT INTO settings(key,value) VALUES(?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (TOOL_INDEX_KEY, json.dumps(payload, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+    return payload
+
+
+def _index_hint(description, limit=48):
+    text = " ".join(str(description or "").split())
+    for mark in ("。", "！", "？"):
+        cut = text.find(mark)
+        if 0 < cut:
+            text = text[:cut]
+            break
+    return text[:limit]
+
+
+def _mcp_function_by_name(name):
+    for item in _openai_mcp_tools():
+        if item["function"]["name"] == name:
+            return item["function"]
+    return None
+
+
+def _tool_description(name):
+    entry = _REGISTRY.get(name)
+    if entry:
+        return (entry[2] or {}).get("description") or ""
+    function = _mcp_function_by_name(name)
+    return (function or {}).get("description") or ""
+
+
+def enabled_tool_names(config=None):
+    """内置工具默认全开（deny 里的除外）；MCP 工具只有 allow 里的才进目录。"""
+    config = config or load_tool_index()
+    denied = set(config.get("deny") or [])
+    names = [name for name in _REGISTRY
+             if name not in TOOL_INDEX_META and name not in denied]
+    allowed = set(config.get("allow") or [])
+    for item in _openai_mcp_tools():
+        name = item["function"]["name"]
+        if name in allowed:
+            names.append(name)
+    return names
+
+
+def tool_index_text(config=None):
+    config = config or load_tool_index()
+    lines = ["%s — %s" % (name, _index_hint(_tool_description(name)))
+             for name in enabled_tool_names(config)]
+    return "\n".join(lines)
+
+
+def _mcp_groups():
+    """MCP 服务器 -> 它带的工具名列表。"""
+    groups = []
+    for server in _mcp_servers():
+        names = [item["function"]["name"]
+                 for item in _openai_mcp_tools([server["id"]])]
+        if names:
+            groups.append({"key": "mcp:%s" % server["id"],
+                           "kind": "mcp",
+                           "label": "MCP · %s" % server["name"],
+                           "names": names})
+    return groups
+
+
+def tool_catalog(config=None):
+    """给设置页面用：所有工具 + 所属分组 + 是否进目录。"""
+    config = config or load_tool_index()
+    allowed = set(config.get("allow") or [])
+    denied = set(config.get("deny") or [])
+    items = []
+    for name in _REGISTRY:
+        if name in TOOL_INDEX_META:
+            continue
+        group = _group_of(name)
+        items.append({"name": name, "hint": _index_hint(_tool_description(name)),
+                      "kind": "builtin", "enabled": name not in denied,
+                      "group": {"key": "builtin:%s" % group, "kind": "builtin",
+                                "label": group}})
+    for group in _mcp_groups():
+        for name in group["names"]:
+            function = _mcp_function_by_name(name) or {}
+            items.append({"name": name,
+                          "hint": _index_hint(function.get("description")),
+                          "kind": "mcp", "enabled": name in allowed,
+                          "group": {"key": group["key"], "kind": "mcp",
+                                    "label": group["label"]}})
+    return items
+
+
+def tool_groups(config=None):
+    """分组概览：每组多少个、开了几个。"""
+    catalog = tool_catalog(config)
+    seen = {}
+    order = []
+    for item in catalog:
+        key = item["group"]["key"]
+        if key not in seen:
+            seen[key] = {"key": key, "kind": item["group"]["kind"],
+                         "label": item["group"]["label"],
+                         "total": 0, "enabled": 0}
+            order.append(key)
+        seen[key]["total"] += 1
+        if item["enabled"]:
+            seen[key]["enabled"] += 1
+    builtin_order = ["builtin:%s" % group for group in BUILTIN_GROUP_ORDER]
+    def rank(key):
+        if key in builtin_order:
+            return (0, builtin_order.index(key))
+        return (1, order.index(key))
+    return sorted(seen.values(), key=lambda item: rank(item["key"]))
+
+
+def set_tool_group(group_key, enabled):
+    """一键开/关整组工具。"""
+    config = load_tool_index()
+    names = [item["name"] for item in tool_catalog(config)
+             if item["group"]["key"] == group_key]
+    allow = set(config["allow"])
+    deny = set(config["deny"])
+    for name in names:
+        if name.startswith("mcp_"):
+            allow.add(name) if enabled else allow.discard(name)
+        else:
+            deny.discard(name) if enabled else deny.add(name)
+    return save_tool_index({"mode": config["mode"], "allow": sorted(allow),
+                            "deny": sorted(deny)})
+
+def openai_index_tools():
+    """索引模式常驻的两个元工具。"""
+    return [{
+        "type": "function",
+        "function": {
+            "name": "tool_show",
+            "description": "查看某个工具的完整参数说明。调用前不需要知道参数，先用它拿说明。",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "工具名"}},
+                "required": ["name"],
+            },
+        },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "description": "按名字执行工具，arguments 是符合该工具 schema 的对象。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "工具名"},
+                    "arguments": {"type": "object", "description": "工具参数"},
+                },
+                "required": ["name", "arguments"],
+            },
+        },
+    }]
+
+
+def chat_tool_definitions(mcp_server_ids=None, allow_tools=True):
+    """聊天时发出去的 tools 字段：全量 schema 或只发目录。"""
+    if not allow_tools:
+        return []
+    config = load_tool_index()
+    if config["mode"] != "on":
+        return openai_tools(mcp_server_ids)
+    return openai_index_tools()
+
+
+def chat_tool_index_block(config=None):
+    """索引模式下附在系统提示末尾的目录。"""
+    config = config or load_tool_index()
+    if config["mode"] != "on":
+        return ""
+    return ("【可用工具目录】\n" + tool_index_text(config)
+            + "\n\n用法：需要哪个工具时，先调用 tool_show 拿完整参数，再用 tool_call 执行。")
+
+
+def tool_show(args, session_id=None):
+    name = str((args or {}).get("name") or "").strip()
+    if not name:
+        return "（需要提供工具名）"
+    entry = _REGISTRY.get(name)
+    if entry and name not in TOOL_INDEX_META:
+        spec = entry[2] or {}
+        return json.dumps({"name": name, "description": spec.get("description") or "",
+                           "parameters": spec.get("parameters") or {}}, ensure_ascii=False)
+    function = _mcp_function_by_name(name)
+    if function:
+        return json.dumps({"name": name, "description": function.get("description") or "",
+                           "parameters": function.get("parameters") or {}}, ensure_ascii=False)
+    return "（没有名为 %s 的工具）" % name
+
+
+def tool_call(args, session_id=None):
+    args = args or {}
+    name = str(args.get("name") or "").strip()
+    payload = args.get("arguments")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            return "（arguments 不是合法 JSON）"
+    if not isinstance(payload, dict):
+        payload = {}
+    if not name:
+        return "（需要提供工具名）"
+    if name in TOOL_INDEX_META:
+        return "（不能这样调用索引工具自身）"
+    known = set(enabled_tool_names())
+    if name not in known:
+        return "（%s 不在当前工具目录里，可能未开启）" % name
+    return execute(name, payload, session_id)["content"]
+
+
+_REGISTRY["tool_show"] = (tool_show, "Morrow 正在翻工具说明", {
+    "description": "查看某个工具的完整参数说明。先看说明，再用 tool_call 执行。",
+    "parameters": {"type": "object",
+                   "properties": {"name": {"type": "string", "description": "工具名"}},
+                   "required": ["name"]},
+})
+_REGISTRY["tool_call"] = (tool_call, "Morrow 正在调用工具", {
+    "description": "按名字执行工具。arguments 必须符合该工具的 schema。",
+    "parameters": {"type": "object",
+                   "properties": {"name": {"type": "string", "description": "工具名"},
+                                  "arguments": {"type": "object", "description": "工具参数"}},
+                   "required": ["name", "arguments"]},
+})
 
 
 def _failed_text(value):
