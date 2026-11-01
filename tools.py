@@ -1635,6 +1635,22 @@ def _keepsake_snapshot_message(conn, row):
     }
 
 
+def read_treasury(args, session_id):
+    import treasury_tools
+    from contextlib import closing
+    with closing(_connect()) as conn:
+        try:return json.dumps(treasury_tools.read(conn,args),ensure_ascii=False)
+        except ValueError as error:return f"（小金库读取失败：{error}）"
+
+
+def request_treasury_expense(args, session_id):
+    import treasury_tools
+    from contextlib import closing
+    with closing(_connect()) as conn:
+        try:return json.dumps(treasury_tools.submit(conn,args,session_id),ensure_ascii=False)
+        except ValueError as error:return f"（小金库申请失败：{error}）"
+
+
 def read_keepsake_candidates(args, session_id):
     import keepsake_capture
     from contextlib import closing
@@ -2036,6 +2052,18 @@ _REGISTRY = {
             "text": {"type": "string", "maxLength": 1000, "description": "新的待办内容，可不填"},
             "completed": {"type": "boolean", "description": "true 标记完成 / false 撤回，可不填"}},
             "required": ["id"]},
+    }),
+    "read_treasury": (read_treasury, "查看小金库账本", {
+        "description": "读取小金库真实余额、今日发薪状态、待审批数。需要流水或申请及审批结果时指定 section 并分页。金额单位为分，100分等于1元。只读，不会加钱、扣款或审批。",
+        "parameters": {"type":"object","additionalProperties":False,"properties":{
+            "section":{"type":"string","enum":["summary","transactions","requests"]},
+            "offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":10}},"required":[]},
+    }),
+    "request_treasury_expense": (request_treasury_expense, "递交小金库消费申请", {
+        "description": "为自己想买的东西递交申请，真实保存后等待用户审批。不直接扣款，不代表批准。金额单位为分，100分等于1元。同一用户消息下相同物品和金额重试不会重复登记；参数冲突时先读取已有申请，不要换理由反复提交。不能给自己发工资或赏金、批准申请。只有工具成功返回回执后才可确认已申请。",
+        "parameters": {"type":"object","additionalProperties":False,"properties":{
+            "item":{"type":"string","maxLength":60},"cents":{"type":"integer","minimum":1,"maximum":100000000},
+            "reason":{"type":"string","maxLength":160}},"required":["item","cents","reason"]},
     }),
     "read_keepsake_candidates": (read_keepsake_candidates, "找出当前对话可留下的片段", {
         "description": "创建留影前先读取当前对话已保存消息的真实 message_id、source_token、有效版本和是否已留影。不能访问其他对话；尚未保存的本轮回复没有 ID。默认最近5条，可用 before_message_id 向前翻页。不要向用户索要内部ID，也不要凭空猜测ID。",

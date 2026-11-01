@@ -36,7 +36,7 @@ def mutate(db, body):
             tx('salary',100,'今日工资',day=day)
         elif action=='bonus': tx('bonus',amount(),text('note',50) or '额外赏金')
         elif action=='request':
-            state['requests'].insert(0,dict(id=str(uuid.uuid4()),item=text('item',60,True),cents=amount(),reason=text('reason',160),status='pending',time=now.isoformat()))
+            state['requests'].insert(0,dict(id=str(uuid.uuid5(uuid.NAMESPACE_URL,'treasury:'+op)),item=text('item',60,True),cents=amount(),reason=text('reason',160),status='pending',time=now.isoformat()))
         elif action=='decide':
             q=next((q for q in state['requests'] if q['id']==body.get('request_id')),None)
             if not q or q['status']!='pending' or type(body.get('approve'))!=bool: raise ValueError("申请不存在或已经处理")
