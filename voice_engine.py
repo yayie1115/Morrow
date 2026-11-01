@@ -12,22 +12,24 @@ TOOL_DEFINITION = {
         "name": TOOL_NAME,
         "description": (
             "给你寄一封真正会被她听到的声音信。只在此刻用声音比文字更贴近时使用，不要每轮都用。"
-            "script 用英文写，是一段完整、自然的口语，通常约 40～100 words，说完想说的就好，长一点"
+            "script 的朗读语言由你根据对话情境自主选择，使用已配置 TTS 支持的语言；用户明确指定语言时优先遵循。"
+            "不固定使用英文，也不必为了发语音刻意换成外语。写完整、自然的口语，说完想说的就好，长一点"
             "短一点都行；标点是语言的呼吸。允许省略号，长短、停顿、吞音和突然断掉。在局部情绪变化"
             "处才放一个英文音频标签。可优先用 [quietly] [whispers] "
             "[playfully] [flustered] [nervously] [hesitant] [tired] [rushed] [light chuckle] "
             "[laughs] [sighs] [slows down]，也可使用简短、明确、可听见的自然英文短语。写的是声音，"
             "只写她能听到的东西。它和其他工具一样，可以在调用前后继续说普通文字；文字用于自然衔接，"
-            "声音信里说过的不用再重复。朗读稿用英文。传 subtitle_zh：按实际朗读句逐句提供自然中文翻译；"
-            "一条英文句子对应数组中的一条中文。"
+            "声音信里说过的不用再重复。纯中文朗读的 subtitle_zh 可传空数组。非中文或中外文混合朗读时，"
+            "传 subtitle_zh：按实际朗读句逐句提供自然中文字幕，一条朗读句对应数组中的一条中文；"
+            "其中原本为中文的句子保留原意。英文音频标签只是声音控制标记，不要求正文使用英文。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "script": {"type": "string", "description": "带少量内联音频标签的完整英文朗读稿"},
+                "script": {"type": "string", "description": "带少量内联音频标签的完整朗读稿，语言由 AI 根据情境选择"},
                 "subtitle_zh": {
                     "type": "array",
-                    "description": "与英文朗读句逐句对应的自然中文字幕",
+                    "description": "非中文或混合语言朗读时逐句对应的自然中文字幕；纯中文可传空数组",
                     "items": {"type": "string"},
                     "maxItems": 80,
                 },

@@ -12,6 +12,52 @@ import tools
 import voice_engine
 
 
+class VoiceLanguagePolicyTest(unittest.TestCase):
+    def test_language_is_chosen_by_ai_and_translations_remain_supported(self):
+        definition=voice_engine.TOOL_DEFINITION['function']
+        self.assertIn('自主选择',definition['description'])
+        self.assertNotIn('朗读稿用英文',definition['description'])
+        self.assertNotIn('完整英文朗读稿',definition['parameters']['properties']['script']['description'])
+        self.assertIn('纯中文',definition['parameters']['properties']['subtitle_zh']['description'])
+        for script in ['[softly] 今天过得好吗？我在这里。','[softly] こんにちは。元気ですか？']:
+            parsed=voice_engine.parse_script(script)
+            self.assertTrue(parsed['text'])
+            self.assertNotIn('[softly]',parsed['text'])
+        self.assertEqual(voice_engine.clean_subtitles([], '我在这里。'),[])
+        self.assertEqual(voice_engine.clean_subtitles(['你好。','还好吗？'],'こんにちは。元気ですか？'),['你好。','还好吗？'])
+
+
+class InlineVoiceBubbleTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'),'Node unavailable')
+    def test_inline_playback_translation_and_exclusivity(self):
+        import subprocess
+        script=r"""
+const assert=require('assert'),fs=require('fs'),vm=require('vm');
+class Node{
+ constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.listeners={};this.dataset={};this.isConnected=true;this.style={setProperty(){}};const set=new Set();this.classList={add:x=>set.add(x),remove:x=>set.delete(x),contains:x=>set.has(x)};}
+ appendChild(x){this.children.push(x);return x;}append(...x){this.children.push(...x);}setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k]??null;}removeAttribute(k){delete this.attrs[k];}
+ addEventListener(k,fn){(this.listeners[k]??=[]).push(fn);}fire(k){for(const f of this.listeners[k]||[])f({stopPropagation(){}});}
+}
+const audios=[];class Audio extends Node{
+ constructor(){super('audio');this.paused=true;this.duration=12.4;this.currentTime=0;audios.push(this);}
+ set src(v){this.attrs.src=v;}get src(){return this.attrs.src;}load(){}pause(){this.paused=true;this.fire('pause');}play(){this.paused=false;this.fire('play');return Promise.resolve();}
+}
+const window={},document={createElement:t=>new Node(t),addEventListener(){},getElementById:()=>null};
+vm.runInNewContext(fs.readFileSync('static/chat-voice.js','utf8'),{window,document,Audio,console,setTimeout,clearTimeout});
+const artifact={id:1,audio_url:'/synthetic.wav',text:'Synthetic text.',meta:{subtitle_zh:['合成译文。']}};
+const first=window.sakieChatVoice.make(artifact,{sentenceCount:1}),button=first.children[0],details=first.children[1];
+assert.equal(audios[0].preload,'none');assert.equal(details.children[0].textContent,'查看文字');assert.equal(details.children[2].textContent,'中文翻译\n合成译文。');
+button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,false);assert.equal(button.attrs['aria-pressed'],'true');
+audios[0].fire('loadedmetadata');assert.equal(button.children[2].textContent,'0:12');
+button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);
+const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});button.onclick({stopPropagation(){}});second.children[0].onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);assert.equal(audios[1].paused,false);
+window.sakieChatVoice.stop();assert.equal(audios[1].paused,true);
+const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,2);
+const plain=window.sakieChatVoice.make({...artifact,id:4,text:'<script>synthetic</script>',meta:{}},{sentenceCount:1});assert.equal(plain.children[1].children[1].textContent,'<script>synthetic</script>');
+"""
+        subprocess.run([shutil.which('node'),'-e',script],check=True)
+
+
 class VoiceLetterTest(unittest.TestCase):
     def setUp(self):
         self.root = os.path.join(os.getcwd(), "data", "test-tmp", uuid.uuid4().hex)

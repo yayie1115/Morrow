@@ -206,6 +206,12 @@
     .treasury-stitch{position:absolute;left:8px;top:10px;bottom:10px;width:7px;border-right:1px solid color-mix(in srgb,var(--accent) 22%,transparent);background:radial-gradient(ellipse at center,var(--accent-strong) 0 1px,transparent 1.5px) center/3px 9px repeat-y;opacity:.45;pointer-events:none;}
     .treasury-mark{display:grid;place-items:center;flex:none;width:29px;height:29px;border:1px solid color-mix(in srgb,var(--accent-strong) 35%,transparent);border-radius:50%;font:18px/1 Georgia,serif;color:var(--accent-strong);box-shadow:inset 0 0 0 3px color-mix(in srgb,var(--accent) 9%,transparent);}
     .treasury-copy{display:grid;gap:4px;flex:1;min-width:0;}.treasury-copy strong{font-size:12px;font-weight:500;letter-spacing:.1em;color:var(--text-secondary);}.treasury-copy>span{font-size:16px;line-height:1.25;color:var(--text-primary);font-weight:550;font-variant-numeric:tabular-nums;}.treasury-pending{flex:none;max-width:35%;padding:4px 7px;border:1px dashed color-mix(in srgb,var(--accent-strong) 45%,transparent);border-radius:4px;font-size:10px;line-height:1.4;color:var(--accent-strong);transform:rotate(-4deg);}.treasury-pending[hidden]{display:none;}.treasury-arrow{font-size:18px;color:var(--text-secondary);}
+    .chat-voice-message{width:222px;max-width:100%;}
+    .chat-voice-play{display:flex;align-items:center;gap:13px;width:100%;min-height:40px;padding:4px 0;border:0;background:none;color:var(--text-primary);text-align:left;-webkit-tap-highlight-color:transparent;}
+    .chat-voice-play:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px;}.chat-voice-icon{font-size:16px;width:18px;color:var(--accent-strong);}.chat-voice-duration{margin-left:auto;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums;color:var(--text-secondary);}
+    .chat-voice-wave{display:flex;gap:3px;align-items:center;height:29px;color:var(--accent-strong);}.chat-voice-wave i{display:block;width:3px;height:var(--bar-height);border-radius:2px;background:currentColor;opacity:.65;transform:scaleY(.6);}.chat-voice-message.playing .chat-voice-wave i{animation:chatVoicePulse .75s ease-in-out infinite alternate;animation-delay:var(--bar-delay);}
+    @keyframes chatVoicePulse{from{transform:scaleY(.35);opacity:.45}to{transform:scaleY(1);opacity:.95}}
+    .chat-voice-transcript{margin-top:6px;font-size:12px;line-height:1.7;}.chat-voice-transcript summary{width:max-content;cursor:pointer;color:var(--text-secondary);font-size:11px;}.chat-voice-original,.chat-voice-translation{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px;}.chat-voice-translation{padding-top:8px;border-top:1px solid var(--paper-line);color:var(--text-secondary);}
     @keyframes viewIn{from{opacity:0;}to{opacity:1;}}
     .page-title{font-size:22px;font-weight:600;letter-spacing:-0.01em;margin:8px 4px 16px;}
     .section-title{font-size:17px;font-weight:600;margin:18px 4px 10px;display:flex;
@@ -4800,6 +4806,7 @@
 
 <script src="/static/ui-preferences.js?v=2"></script>
 <script src="/static/chat-viewport.js?v=9"></script>
+<script src="/static/chat-voice.js?v=1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -4973,6 +4980,7 @@ function applyFavState(wrap){
 /* ---------- views ---------- */
 let suppressChatAutofocus=false;
 function showView(name){
+  if(name!=="chat")window.sakieChatVoice?.stop();
   if(name!=="chat"&&typeof KEEPSAKE_SELECTING!=="undefined"&&KEEPSAKE_SELECTING)stopKeepsakeSelection();
   const destination=$("#view-"+name);
   $$(".view").forEach(v=>v.classList.toggle("active",v===destination));
@@ -6266,7 +6274,7 @@ function setAIBody(wrap){
   const voice=activeVoiceArtifact(wrap);
   if(voice){const legacyReplace=voice.meta?.text_offset==null&&visible.trim()===(voice.text||"").trim();
     const source=legacyReplace?"":visible,offset=Math.max(0,Math.min(Number(voice.meta?.text_offset??source.length),source.length));
-    renderText(source.slice(0,offset));body.appendChild(makeVoiceEnvelope(voice));renderText(source.slice(offset));}
+    renderText(source.slice(0,offset));body.appendChild(window.sakieChatVoice.make(voice,{notify:toast,sentenceCount:splitVoiceSentences(voice.text).length}));renderText(source.slice(offset));}
   else renderText(visible);
   renderStickers(body,wrap._attachmentVersions?.[wrap._vi]||[],true);
   const parts=[...body.querySelectorAll(".ai-part")];
@@ -6305,7 +6313,7 @@ function animateVoiceOrb(){cancelAnimationFrame(voiceVisualFrame);const viewer=$
   const frame=()=>{if(!viewer.classList.contains("on")){viewer.style.setProperty("--voice-level","0");return;}
     let level=0;if(voiceAnalyser&&!$("#voiceAudio").paused){voiceAnalyser.getByteFrequencyData(data);let sum=0;for(let i=2;i<48;i++)sum+=data[i];level=Math.min(1,sum/(46*150));}
     viewer.style.setProperty("--voice-level",level.toFixed(3));voiceVisualFrame=requestAnimationFrame(frame);};frame();}
-async function openVoiceLetter(artifact,{autoplay=true}={}){currentVoiceArtifact=artifact;const viewer=$("#voiceViewer"),audio=$("#voiceAudio");
+async function openVoiceLetter(artifact,{autoplay=true}={}){window.sakieChatVoice?.stop();currentVoiceArtifact=artifact;const viewer=$("#voiceViewer"),audio=$("#voiceAudio");
   voiceSentences=splitVoiceSentences(artifact.text);const savedTranslations=Array.isArray(artifact.meta?.subtitle_zh)?artifact.meta.subtitle_zh:[];voiceTranslations=savedTranslations.length===voiceSentences.length?savedTranslations:[];const savedTimings=Array.isArray(artifact.meta?.sentence_timings)?artifact.meta.sentence_timings:[];voiceSentenceTimings=savedTimings.length===voiceSentences.length&&savedTimings.every((item,index)=>item&&Number.isFinite(Number(item.start))&&Number.isFinite(Number(item.end))&&Number(item.start)>=0&&Number(item.end)>=Number(item.start)&&(index===0||Number(item.start)>=Number(savedTimings[index-1].start)))?savedTimings.map(item=>({start:Number(item.start),end:Number(item.end)})):[];voiceCaptionSentence="";clearTimeout(voiceCaptionHideTimer);$("#voiceTranscript").textContent="";$("#voiceTranscript").classList.remove("on","leaving");clearTimeout(voiceJsonHideTimer);clearTimeout(voiceSettleTimer);$("#voiceJsonBody").classList.remove("open");$("#voiceJsonBody").hidden=true;$("#voiceJsonBody").textContent="";setVoicePlayIcon(false);
   audio.pause();audio.currentTime=0;audio.src=artifact.audio_url;audio.load();resetVoiceProgress(0);updateVoiceTime();viewer.style.setProperty("--voice-level","0");viewer.classList.add("on");
   const route=currentAppRoute();if(route&&!route.overlay)history.pushState({...route,level:route.level+1,overlay:"voice"},"");
