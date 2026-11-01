@@ -34,7 +34,7 @@ class InlineVoiceBubbleTest(unittest.TestCase):
         script=r"""
 const assert=require('assert'),fs=require('fs'),vm=require('vm');
 class Node{
- constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.listeners={};this.dataset={};this.isConnected=true;this.style={setProperty(){}};const set=new Set();this.classList={add:x=>set.add(x),remove:x=>set.delete(x),contains:x=>set.has(x)};}
+ constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.listeners={};this.dataset={};this.isConnected=true;this.style={setProperty(k,v){this[k]=v;}};const set=new Set();this.classList={add:x=>set.add(x),remove:x=>set.delete(x),contains:x=>set.has(x)};}
  appendChild(x){this.children.push(x);return x;}append(...x){this.children.push(...x);}setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k]??null;}removeAttribute(k){delete this.attrs[k];}
  addEventListener(k,fn){(this.listeners[k]??=[]).push(fn);}fire(k){for(const f of this.listeners[k]||[])f({stopPropagation(){}});}
 }
@@ -54,6 +54,9 @@ audios[0].fire('loadedmetadata');assert.equal(button.children[1].textContent,'13
 button.onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);
 const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});button.onclick({stopPropagation(){}});second.children[0].children[0].onclick({stopPropagation(){}});assert.equal(audios[0].paused,true);assert.equal(audios[1].paused,false);
 window.sakieChatVoice.stop();assert.equal(audios[1].paused,true);
+const shortVoice=window.sakieChatVoice.make({...artifact,id:40,audio_url:'/synthetic-short.wav',duration:5});
+const longVoice=window.sakieChatVoice.make({...artifact,id:41,audio_url:'/synthetic-long.wav',duration:31});
+assert.equal(shortVoice.style['--chat-voice-width'],'103px');assert.equal(longVoice.style['--chat-voice-width'],'142px');
 const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,1);
 const grouped=window.sakieChatVoice.make({...artifact,id:5,meta:{subtitle_zh:['第一段译文。','第二段译文。']}},{sentenceCount:1});assert.equal(grouped.children[1].children.length,2);assert.ok(grouped.children[1].children[1].textContent.includes('第二段译文'));
 let resolvePending,rejectPending;const notices=[];const pendingRoot=window.sakieChatVoice.make({...artifact,id:8},{notify:x=>notices.push(x)}),pendingAudio=audios[audios.length-1],pendingButton=pendingRoot.children[0].children[0];pendingAudio.play=function(){this.paused=false;return new Promise((resolve,reject)=>{resolvePending=resolve;rejectPending=reject;});};
