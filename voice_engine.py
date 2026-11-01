@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 
 TOOL_NAME = "send_voice_letter"
@@ -21,7 +22,7 @@ TOOL_DEFINITION = {
             "只写她能听到的东西。它和其他工具一样，可以在调用前后继续说普通文字；文字用于自然衔接，"
             "声音信里说过的不用再重复。纯中文朗读的 subtitle_zh 可传空数组。非中文或中外文混合朗读时，"
             "传 subtitle_zh：按实际朗读句逐句提供自然中文字幕，一条朗读句对应数组中的一条中文；"
-            "其中原本为中文的句子保留原意。英文音频标签只是声音控制标记，不要求正文使用英文。"
+            "其中原本为中文的句子保留原意。英文音频标签只是声音控制标记，不要求正文使用英文。实际声音严格按 script 朗读，不会自动翻译；不得把英文原稿声称为中文语音。"
         ),
         "parameters": {
             "type": "object",
@@ -156,6 +157,17 @@ def clean_subtitles(raw, text):
     if not subtitles or any(not item for item in subtitles):
         return []
     return subtitles if len(subtitles) == len(split_sentences(text)) else []
+
+
+def validated_subtitles(raw, text):
+    """Reject missing foreign-language subtitles instead of silently dropping them."""
+    subtitles = clean_subtitles(raw, text)
+    has_foreign_letters = any(unicodedata.category(char).startswith("L") and not ("\u3400" <= char <= "\u9fff") for char in text)
+    if raw and not subtitles:
+        raise ValueError("中文字幕须与实际朗读句逐句对应，不能缺句或留空。")
+    if has_foreign_letters and (not subtitles or not any(re.search(r"[\u3400-\u9fff]", line) for line in subtitles)):
+        raise ValueError("非中文或混合语言语音必须提供逐句中文字幕；中文翻译不会改变实际朗读语言。")
+    return subtitles
 
 
 def history_record(script, text="", tags=None):

@@ -139,7 +139,10 @@ class VoiceLetterTest(unittest.TestCase):
         first = executor(voice_engine.TOOL_NAME, {
             "script": script, "subtitle_zh": ["我想你了。"]
         }, sid)
-        second = executor(voice_engine.TOOL_NAME, {"script": "不会被再次生成"}, sid)
+        second = executor(voice_engine.TOOL_NAME, {"script": script, "subtitle_zh": ["我想你了。"]}, sid)
+        conflict = executor(voice_engine.TOOL_NAME, {"script": "换成中文的新稿。", "subtitle_zh": []}, sid)
+        self.assertFalse(conflict["ok"])
+        self.assertEqual(conflict["error"], "voice script conflict")
         self.assertTrue(first["ok"] and first["hidden"])
         self.assertFalse(first.get("terminal", False))
         self.assertEqual(first["artifact_id"], second["artifact_id"])
@@ -152,6 +155,39 @@ class VoiceLetterTest(unittest.TestCase):
         self.assertEqual(meta["sentence_timings"][0]["start"], script.index("I") * 0.05)
         self.assertTrue(os.path.isfile(os.path.join(app.UPLOAD_DIR, "voice_letters",
                                                     os.listdir(os.path.join(app.UPLOAD_DIR, "voice_letters"))[0])))
+
+    @mock.patch("app._generate_tts_audio")
+    def test_foreign_voice_without_translation_is_rejected_before_spending(self, generate):
+        self.seed_config()
+        with sqlite3.connect(app.DB_PATH) as db:
+            sid=db.execute("INSERT INTO sessions(title) VALUES ('synthetic')").lastrowid
+        executor=app._voice_letter_executor(sid,'subtitle-validation')
+        for args in [{'script':'Synthetic English.','subtitle_zh':[]}, {'script':'Synthetic English.','subtitle_zh':['English again.']}, {'script':'Synthetic English.','subtitle_zh':['一。','二。']}]:
+            outcome=executor(voice_engine.TOOL_NAME,args,sid)
+            self.assertFalse(outcome['ok'])
+            self.assertEqual(outcome['error'],'invalid voice subtitles')
+        generate.assert_not_called()
+        with sqlite3.connect(app.DB_PATH) as db:self.assertEqual(db.execute('SELECT count(*) FROM message_artifacts').fetchone()[0],0)
+
+    @mock.patch("app._generate_tts_audio")
+    def test_failed_voice_retry_updates_script_and_display_together(self, generate):
+        self.seed_config()
+        with sqlite3.connect(app.DB_PATH) as db:
+            sid=db.execute("INSERT INTO sessions(title) VALUES ('synthetic retry')").lastrowid
+        executor=app._voice_letter_executor(sid,'changed-retry')
+        generate.side_effect=[RuntimeError('synthetic provider failure'),(b'synthetic-audio','audio/mpeg',5,{})]
+        failed=executor(voice_engine.TOOL_NAME,{'script':'Synthetic English.','subtitle_zh':['合成英文。']},sid)
+        self.assertFalse(failed['ok'])
+        done=executor(voice_engine.TOOL_NAME,{'script':'[softly] 这是一段合成中文。','subtitle_zh':[]},sid)
+        self.assertTrue(done['ok'])
+        with sqlite3.connect(app.DB_PATH) as db:
+            row=db.execute('SELECT visible_text,source_payload,meta,status FROM message_artifacts').fetchone()
+            self.assertEqual(db.execute('SELECT count(*) FROM message_artifacts').fetchone()[0],1)
+        self.assertEqual(row[0],'这是一段合成中文。')
+        self.assertEqual(json.loads(row[1])['script'],'[softly] 这是一段合成中文。')
+        self.assertEqual(json.loads(row[2])['subtitle_zh'],[])
+        self.assertEqual(row[3],'ready')
+        self.assertEqual(generate.call_args[0][1],'[softly] 这是一段合成中文。')
 
     def test_history_uses_original_script_inside_an_explicit_voice_boundary(self):
         conn = sqlite3.connect(app.DB_PATH)

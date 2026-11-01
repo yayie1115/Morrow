@@ -7206,9 +7206,22 @@ def _voice_letter_executor(session_id, run_id):
             "SELECT * FROM message_artifacts WHERE type='voice_letter' AND run_id=?", (run_id,)
         ).fetchone()
         if existing and existing["status"] == "ready":
+            try:
+                saved_source = json.loads(existing["source_payload"] or "{}")
+                saved_meta = json.loads(existing["meta"] or "{}")
+            except (TypeError, ValueError):
+                saved_source, saved_meta = {}, {}
             conn.close()
-            return outcome(True, "声音信已经寄出，可以自然地继续刚才的话。", hidden=True,
+            if saved_source.get("script") != parsed["script"] or saved_meta.get("subtitle_zh", []) != subtitles_zh:
+                return outcome(False, "本轮声音信已经发送；新稿件或字幕与已发送内容不同，未按新稿重发。若要改语言，请在下一轮重新发送。",
+                               "voice script conflict", hidden=True)
+            return outcome(True, "返回本轮已经发送的同一封声音信，没有再次生成。", hidden=True,
                            artifact_id=existing["id"], visible_text=existing["visible_text"])
+        try:
+            subtitles_zh = voice_engine.validated_subtitles((args or {}).get("subtitle_zh"), parsed["text"])
+        except ValueError as error:
+            conn.close()
+            return outcome(False, str(error), "invalid voice subtitles", hidden=True)
         config = _tts_config(reveal_key=True, db=conn)
         if not config["api_key"] or not config["voice_id"] or not config["model"]:
             conn.close()
@@ -7222,7 +7235,10 @@ def _voice_letter_executor(session_id, run_id):
                 "subtitle_zh": subtitles_zh}
         if existing:
             artifact_id = existing["id"]
-            conn.execute("UPDATE message_artifacts SET status='generating',error='',updated_at=datetime('now','+8 hours') WHERE id=?", (artifact_id,))
+            conn.execute(
+                "UPDATE message_artifacts SET status='generating',visible_text=?,source_payload=?,meta=?,error='',updated_at=datetime('now','+8 hours') WHERE id=?",
+                (parsed["text"], json.dumps(payload, ensure_ascii=False), json.dumps(meta, ensure_ascii=False), artifact_id),
+            )
         else:
             cur = conn.execute(
                 "INSERT INTO message_artifacts (type,session_id,version_run_id,run_id,status,visible_text,source_payload,meta) "
