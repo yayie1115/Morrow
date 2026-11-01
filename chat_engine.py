@@ -693,6 +693,13 @@ def model_supports_images(model, fmt="openai"):
 def _message_content(text, attachments, target="openai", include_images=True,
                      image_variant="original"):
     text_blocks = [text or ""]
+    voice_charts=[]
+    for voice in attachments or []:
+        if not isinstance(voice,dict) or voice.get('type')!='voice_input':continue
+        summary=voice.get('summary') or {}
+        text_blocks.append("【这条用户语音的声学测量，仅供辅助理解，不是确定情绪的证据】\n"+json.dumps(summary,ensure_ascii=False))
+        if voice.get('voice_chart_enabled') and voice.get('chart_path'):
+            voice_charts.append({'type':'image','path':voice['chart_path'],'mime':'image/png'})
     for a in attachments or []:
         if not isinstance(a, dict) or a.get("type") != "text":
             continue
@@ -706,7 +713,7 @@ def _message_content(text, attachments, target="openai", include_images=True,
         )
     text = "\n\n".join(b for b in text_blocks if b)
     image_parts = (
-        _attachment_parts(attachments, target=target, image_variant=image_variant)
+        _attachment_parts((attachments or [])+voice_charts, target=target, image_variant=image_variant)
         if include_images else []
     )
     if not image_parts:
@@ -1097,6 +1104,8 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
                     continue
                 if attachment.get("type") == "sticker":
                     continue
+                if attachment.get("type") == "voice_input":
+                    attachment={**attachment,'voice_chart_enabled':r['id']==current_user_message_id}
                 if attachment.get("type") != "image":
                     sent_attachments.append(attachment)
                     continue

@@ -160,3 +160,13 @@ The separately deployed [private administration MCP](deploy/vps_admin/README.md)
 lets an explicitly authorized owner expose the host administrator account to
 Morrow's existing tool interface. It is off unless installed and registered;
 it is not a sandbox and must never be exposed as a public unauthenticated API.
+
+
+### Optional local voice input
+
+Chat → ＋ → 语音 supports recording, preview, local transcription and acoustic charts, then explicit send.
+A successful analysis is required before an assistant reply; failures retain the recording for retry.
+The backend uses an authenticated loopback tunnel to the Windows analyzer, not MCP.
+Configure a backend-only `EARS_KEY_FILE` and optionally `EARS_LOCAL_PORT`; never expose the key to frontend code.
+See `scripts/local_ears/README.md`. Without the analyzer or a working tunnel, ordinary text chat remains available.
+Audio interpretation uses the current chat model: chart reading additionally requires image input support.

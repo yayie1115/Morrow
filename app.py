@@ -3140,6 +3140,71 @@ def _music_context_prompt(raw):
     return prompt
 
 
+@app.get("/api/chat/voice-input")
+@require_auth
+def voice_input_list():
+    import incoming_voice
+    sid=request.args.get("session_id",type=int)
+    rows=get_db().execute("SELECT * FROM message_artifacts WHERE type='user_voice' AND session_id=? AND message_id IS NULL ORDER BY id DESC LIMIT 10",(sid,)).fetchall()
+    return jsonify({"enabled":incoming_voice.configured(),"items":[incoming_voice.public(r) for r in rows]})
+
+
+@app.post("/api/chat/voice-input")
+@require_auth
+def voice_input_upload():
+    import incoming_voice
+    if not incoming_voice.configured():return jsonify({"error":"本地语音分析尚未连接"}),503
+    sid=request.form.get("session_id",type=int);db=get_db()
+    if not sid or not db.execute("SELECT id FROM sessions WHERE id=?",(sid,)).fetchone():return jsonify({"error":"请先进入一个会话"}),400
+    upload=request.files.get("audio")
+    ext=os.path.splitext(upload.filename or "")[1].lower() if upload else ""
+    if ext not in incoming_voice.EXTENSIONS:return jsonify({"error":"不支持的录音格式"}),415
+    content=upload.stream.read(incoming_voice.MAX_BYTES+1)
+    if not content or len(content)>incoming_voice.MAX_BYTES:return jsonify({"error":"录音为空或超过25MB"}),413
+    token=str(request.form.get("request_id") or "")
+    try:token=str(uuid.UUID(token))
+    except ValueError:return jsonify({"error":"缺少有效录音编号"}),400
+    existing=db.execute("SELECT * FROM message_artifacts WHERE type='user_voice' AND run_id=?",(token,)).fetchone()
+    if existing:
+        if existing['session_id']!=sid:return jsonify({"error":"语音会话冲突"}),409
+        import hashlib
+        if json.loads(existing['source_payload']).get('sha256')!=hashlib.sha256(content).hexdigest():return jsonify({"error":"同编号录音内容不一致"}),409
+        return jsonify(incoming_voice.public(existing))
+    import hashlib
+    name=uuid.uuid4().hex+ext;os.makedirs(UPLOAD_DIR,exist_ok=True)
+    with open(os.path.join(UPLOAD_DIR,name),'xb') as f:f.write(content)
+    try:
+        cur=db.execute("INSERT INTO message_artifacts (type,session_id,run_id,status,file_path,mime,source_payload) VALUES ('user_voice',?,?,'queued',?,?,?)",(sid,token,name,incoming_voice.EXTENSIONS[ext],json.dumps({'sha256':hashlib.sha256(content).hexdigest()})))
+        db.commit()
+    except sqlite3.IntegrityError:
+        os.unlink(os.path.join(UPLOAD_DIR,name));return jsonify({"error":"录音正在保存，请读取待处理录音"}),409
+    if not incoming_voice.schedule(DB_PATH,UPLOAD_DIR,cur.lastrowid):
+        db.execute("UPDATE message_artifacts SET status='failed',error='分析队列已满，录音已保存，请稍后重试。' WHERE id=?",(cur.lastrowid,));db.commit()
+    row=db.execute("SELECT * FROM message_artifacts WHERE id=?",(cur.lastrowid,)).fetchone()
+    return jsonify(incoming_voice.public(row)),202
+
+
+@app.get("/api/chat/voice-input/<int:aid>")
+@require_auth
+def voice_input_status(aid):
+    import incoming_voice
+    row=get_db().execute("SELECT * FROM message_artifacts WHERE id=? AND type='user_voice' AND session_id=?",(aid,request.args.get('session_id',type=int))).fetchone()
+    if not row:return jsonify({"error":"语音不存在"}),404
+    return jsonify(incoming_voice.public(row))
+
+
+@app.post("/api/chat/voice-input/<int:aid>/retry")
+@require_auth
+def voice_input_retry(aid):
+    import incoming_voice
+    sid=(request.get_json(silent=True) or {}).get('session_id')
+    row=get_db().execute("SELECT * FROM message_artifacts WHERE id=? AND type='user_voice' AND session_id=?",(aid,sid)).fetchone()
+    if not row:return jsonify({"error":"语音不存在"}),404
+    if row['message_id']:return jsonify({"error":"录音已经发送","message_id":row['message_id']}),409
+    if not incoming_voice.schedule(DB_PATH,UPLOAD_DIR,aid):return jsonify({"error":"分析队列已满，请稍后重试"}),429
+    return jsonify({"ok":True})
+
+
 @app.post("/api/chat/send")
 @require_auth
 def chat_send():
@@ -3151,7 +3216,10 @@ def chat_send():
     data = request.get_json(silent=True) or {}
     text = (data.get("message") or "").strip()
     attachments = _clean_attachments(data.get("attachments"))
-    if not text and not attachments:
+    voice_id=data.get("voice_input_id")
+    if voice_id is not None and (isinstance(voice_id,bool) or not isinstance(voice_id,int) or voice_id<1 or not data.get('session_id')):
+        return jsonify({'error':'语音编号或会话无效'}),400
+    if not text and not attachments and not voice_id:
         return jsonify({"error": "empty message"}), 400
     model = data.get("model")
     music_prompt = _music_context_prompt(data.get("music_context"))
@@ -3173,6 +3241,15 @@ def chat_send():
         if not exists:
             return jsonify({"error": "session not found"}), 404
 
+    if voice_id:
+        import incoming_voice
+        db.execute("BEGIN IMMEDIATE")
+        try:voice_row,voice_attachment=incoming_voice.bind(db,session_id,voice_id)
+        except (ValueError,TypeError):
+            db.rollback();return jsonify({"error":"录音尚未就绪或不属于当前会话"}),409
+        if voice_attachment is None:
+            db.rollback();return jsonify({"error":"这条语音已经保存，请刷新查看，勿重复发送","message_id":voice_row['message_id']}),409
+        text=voice_row['visible_text'];attachments=[voice_attachment]
     cur = db.execute(
         "INSERT INTO messages (session_id, role, content, attachments) VALUES (?, 'user', ?, ?)",
         (session_id, text, json.dumps(attachments, ensure_ascii=False)),
@@ -3182,6 +3259,8 @@ def chat_send():
         (session_id,),
     )
     user_msg_id = cur.lastrowid
+    if voice_id:
+        db.execute("UPDATE message_artifacts SET message_id=? WHERE id=? AND message_id IS NULL",(user_msg_id,voice_id))
     _queue_image_descriptions(
         db, user_msg_id, attachments,
         enabled=bool(data.get("vision_enabled")),
