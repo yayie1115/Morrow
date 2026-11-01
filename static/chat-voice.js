@@ -30,7 +30,7 @@
     row.append(play,textButton);root.appendChild(row);
     const audio=new Audio();audio.preload='none';audio.hidden=true;let failed=false,pending=false,attempt=0;
     const reset=()=>{pending=false;root.classList.remove('playing');root.classList.remove('loading');play.setAttribute('aria-busy','false');play.setAttribute('aria-label','播放语音');play.setAttribute('aria-pressed','false');if(playing?.root===root)playing=null;};
-    const updateDuration=value=>{if(Number.isFinite(value)&&value>0){durationCache.set(artifact.audio_url,value);root.style.setProperty('--chat-voice-width',Math.round(100+Math.min(80,Math.max(0,value-3)*1.5))+'px');if(time.textContent!==clock(value))time.textContent=clock(value);}};
+    const updateDuration=value=>{if(Number.isFinite(value)&&value>0){durationCache.set(artifact.audio_url,value);root.style.setProperty('--chat-voice-width','110px');if(time.textContent!==clock(value))time.textContent=clock(value);}};
     const started=()=>{if(audio.paused)return;pending=false;root.classList.remove('loading');root.classList.add('playing');play.setAttribute('aria-busy','false');play.setAttribute('aria-label','暂停语音');play.setAttribute('aria-pressed','true');};
     const buffering=()=>{if(!audio.paused){root.classList.add('loading');play.setAttribute('aria-busy','true');play.setAttribute('aria-label','语音加载中，点击可暂停');}};
     const cancel=()=>{attempt++;pending=false;audio.pause();reset();};

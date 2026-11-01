@@ -56,7 +56,7 @@ const second=window.sakieChatVoice.make({...artifact,id:2},{sentenceCount:1});bu
 window.sakieChatVoice.stop();assert.equal(audios[1].paused,true);
 const shortVoice=window.sakieChatVoice.make({...artifact,id:40,audio_url:'/synthetic-short.wav',duration:5});
 const longVoice=window.sakieChatVoice.make({...artifact,id:41,audio_url:'/synthetic-long.wav',duration:31});
-assert.equal(shortVoice.style['--chat-voice-width'],'103px');assert.equal(longVoice.style['--chat-voice-width'],'142px');
+assert.equal(shortVoice.style['--chat-voice-width'],'110px');assert.equal(longVoice.style['--chat-voice-width'],'110px');
 const unknown=window.sakieChatVoice.make({...artifact,id:3,meta:{subtitle_zh:['bad','count']}},{sentenceCount:1});assert.equal(unknown.children[1].children.length,1);
 const grouped=window.sakieChatVoice.make({...artifact,id:5,meta:{subtitle_zh:['第一段译文。','第二段译文。']}},{sentenceCount:1});assert.equal(grouped.children[1].children.length,2);assert.ok(grouped.children[1].children[1].textContent.includes('第二段译文'));
 let resolvePending,rejectPending;const notices=[];const pendingRoot=window.sakieChatVoice.make({...artifact,id:8},{notify:x=>notices.push(x)}),pendingAudio=audios[audios.length-1],pendingButton=pendingRoot.children[0].children[0];pendingAudio.play=function(){this.paused=false;return new Promise((resolve,reject)=>{resolvePending=resolve;rejectPending=reject;});};
