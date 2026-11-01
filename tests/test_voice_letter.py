@@ -144,10 +144,15 @@ class VoiceLetterTest(unittest.TestCase):
         sid = conn.execute("INSERT INTO sessions(title) VALUES ('voice')").lastrowid
         conn.commit();conn.close()
         executor = app._voice_letter_executor(sid, "run-one")
+        shown=executor("tool_show",{"name":voice_engine.TOOL_NAME},sid)
+        schema=json.loads(shown["content"])
+        self.assertEqual(schema["name"],voice_engine.TOOL_NAME)
+        self.assertIn("script",schema["parameters"]["properties"])
+        self.assertIsNone(executor("tool_show",{"name":"unrelated"},sid))
         first = executor(voice_engine.TOOL_NAME, {
             "script": script, "subtitle_zh": ["我想你了。"]
         }, sid)
-        second = executor(voice_engine.TOOL_NAME, {"script": script, "subtitle_zh": ["我想你了。"]}, sid)
+        second = executor("tool_call", {"name":voice_engine.TOOL_NAME,"arguments":json.dumps({"script":script,"subtitle_zh":["我想你了。"]})}, sid)
         conflict = executor(voice_engine.TOOL_NAME, {"script": "换成中文的新稿。", "subtitle_zh": []}, sid)
         self.assertFalse(conflict["ok"])
         self.assertEqual(conflict["error"], "voice script conflict")

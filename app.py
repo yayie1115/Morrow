@@ -7330,6 +7330,9 @@ def _artifact_history_prompt(sticker_prompt="", voice_enabled=False):
     record_names = []
     rules = []
     if voice_enabled:
+        parts.append("【本轮可用语音工具】\nsend_voice_letter — 生成并发送语音，语言由你根据当前对话选择。"
+                     "该工具属于本轮聊天的临时工具，不在公共目录中；已提供完整 schema，可直接调用。"
+                     "也支持 tool_show(name=send_voice_letter) 查看参数，再用 tool_call 调用。")
         record_names.append("【语音 · …】")
         rules.append(
             "【语音 · 内容：…】的右括号就是声音结束的位置，括号外的文字不属于语音；"
@@ -7411,6 +7414,20 @@ def _artifact_dict(row, *, include_source=False):
 
 def _voice_letter_executor(session_id, run_id):
     def execute(name, args, _session_id):
+        # Voice is scoped to this chat turn, so it is not a global registry tool.
+        # Support the directory wrappers without registering a shared executor.
+        if name in {"tool_show", "tool_call"} and isinstance(args,dict) and args.get("name")==voice_engine.TOOL_NAME:
+            if name=="tool_show":
+                return {"ok":True,"content":json.dumps(voice_engine.TOOL_DEFINITION["function"],ensure_ascii=False),
+                        "source":"builtin","server":"","duration_ms":0}
+            payload=args.get("arguments")
+            if isinstance(payload,str):
+                try:payload=json.loads(payload)
+                except ValueError:payload=None
+            if not isinstance(payload,dict):
+                return {"ok":False,"content":"语音 arguments 必须是有效参数对象。","error":"invalid voice arguments",
+                        "hidden":True,"source":"builtin","server":"","duration_ms":0}
+            name,args=voice_engine.TOOL_NAME,payload
         if name != voice_engine.TOOL_NAME:
             return None
         started = time.perf_counter()
