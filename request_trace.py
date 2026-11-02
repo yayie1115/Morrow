@@ -24,7 +24,8 @@ def _write(state, outcome):
     metadata = {'trace_id': attempt['trace_id'], 'outcome': outcome,
                 'upstream_ids': attempt.get('upstream_ids', {}),
                 'session_id': state['provider'].get('trace_session_id'),
-                'user_message_id': state['provider'].get('trace_user_message_id')}
+                'user_message_id': state['provider'].get('trace_user_message_id'),
+                'repetition_origin': state.get('repetition_origin')}
     try:
         with closing(sqlite3.connect(state['db'], timeout=.3)) as conn, conn:
             conn.execute('UPDATE http_request_logs SET ok=?,status_code=?,elapsed_ms=?,error_type=?,error=? WHERE id=?',
@@ -45,7 +46,7 @@ def legacy(error_type='', ok=False):
     """Existing transport log calls finish their own started row, not a second row."""
     state = _current.get()
     if not state or not state.get('attempt'): return False
-    outcome = state['outcome'] if state['outcome'] in ('stream_error', 'cancelled', 'exception', 'connection_error') else ('complete' if ok else (error_type or 'request_error'))
+    outcome = state['outcome'] if state['outcome'] in ('stream_error', 'repetition_abort', 'cancelled', 'exception', 'connection_error') else ('complete' if ok else (error_type or 'request_error'))
     state['outcome'] = outcome
     _write(state, outcome)
     return True
@@ -115,7 +116,9 @@ def traced(function):
                     completed = True
                     return done.value
                 if event[0] == 'error':
-                    state['outcome'] = 'stream_error'
+                    state['outcome'] = 'repetition_abort' if isinstance(event[1], dict) and event[1].get('code') == 'REPETITION_ABORT' else 'stream_error'
+                    if state['outcome'] == 'repetition_abort':
+                        state['repetition_origin'] = 'upstream_text' if event[1].get('origin') == 'upstream_text' else 'projected_text'
                     _write(state, state['outcome'])
                 yield event
         except GeneratorExit:

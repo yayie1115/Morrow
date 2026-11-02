@@ -126,3 +126,18 @@ class GeminiNativeTest(unittest.TestCase):
         signed=[p for m in body['contents'] for p in m['parts'] if p.get('thoughtSignature')]
         self.assertEqual(signed[0]['thoughtSignature'],'signed')
         self.assertTrue(any('functionResponse' in p for m in body['contents'] for p in m['parts']))
+    def test_short_symbol_cycles_stop_but_brief_faces_and_prose_do_not(self):
+        self.assertTrue(chat_engine._looks_like_runaway('prefix '+':]。 '*16))
+        self.assertFalse(chat_engine._looks_like_runaway('hello :] see you :]'))
+        self.assertFalse(chat_engine._looks_like_runaway('A normal sentence.\n'+'-'*24))
+        self.assertFalse(chat_engine._looks_like_runaway('普通中文内容，包含正常标点。'))
+
+    def test_raw_native_repetition_is_not_shown_or_executed(self):
+        frames=[{'candidates':[{'content':{'parts':[{'text':'normal beginning.'}]}}]},
+                {'candidates':[{'content':{'parts':[{'text':':]。 '*16},
+                    {'functionCall':{'name':'write_something','args':{}}}]},'finishReason':'STOP'}]}]
+        events,result,_=self.run_stream(frames)
+        error=next(value for kind,value in events if kind=='error')
+        self.assertEqual(error['code'],'REPETITION_ABORT')
+        self.assertNotIn(':]', ''.join(value for kind,value in events if kind=='delta'))
+        self.assertEqual(result[1],[])

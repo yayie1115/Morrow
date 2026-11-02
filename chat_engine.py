@@ -2343,6 +2343,18 @@ def _looks_like_runaway(text):
     if text.count("\ufffd") > 200:
         return True
     tail = text[-REPLY_REPEAT_WINDOW:]
+    # Catch long runs of short punctuation/emoji cycles without truncating
+    # normal prose, brief emoticons, or Markdown separator lines.
+    compact_tail = re.sub(r"\s+", "", tail)
+    for size in range(1, 8):
+        unit = compact_tail[-size:]
+        if len(unit) != size or any(char.isalnum() for char in unit):
+            continue
+        if set(unit) <= set("-_=~*."):
+            continue
+        repeats = max(12, (48 + size - 1) // size)
+        if compact_tail.endswith(unit * repeats):
+            return True
     for size in (8, 12, 16, 24, 40):
         if len(tail) < size * REPLY_REPEAT_TIMES:
             continue

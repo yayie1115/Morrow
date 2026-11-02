@@ -105,6 +105,7 @@ def stream(engine, base_url, api_key, model, messages, think, provider_meta, too
     started = time.monotonic()
     url = endpoint(base_url, model)
     usage, text, calls, native_parts = None, [], [], []
+    raw_reply_parts = []
     finished, failed, response = False, False, None
     splitter = engine._ThinkSplitter(detect_markers=True)
     definitions = engine.tools.chat_tool_definitions() if tool_definitions is None else tool_definitions
@@ -149,6 +150,12 @@ def stream(engine, base_url, api_key, model, messages, think, provider_meta, too
                     if part.get('thought'):
                         yield 'reasoning', part['text']
                     else:
+                        raw_reply_parts.append(part['text'])
+                        if engine._looks_like_runaway(''.join(raw_reply_parts)):
+                            failed = True
+                            yield 'error', {'status': 200, 'code': 'REPETITION_ABORT', 'origin': 'upstream_text',
+                                            'message': '回复出现持续重复，已停止；已收到内容予以保留。'}
+                            return ''.join(text), [], usage
                         for kind, chunk in splitter.feed(part['text']):
                             if kind == 'delta': text.append(chunk)
                             yield kind, chunk
@@ -167,7 +174,10 @@ def stream(engine, base_url, api_key, model, messages, think, provider_meta, too
                     yield 'error', {'status': 200, 'message': 'Gemini 回复未完整完成：' + str(reason)}
                     return ''.join(text), [], usage
             if engine._looks_like_runaway(''.join(text)):
-                raise ValueError('Gemini 回复过长或重复，已停止。')
+                failed = True
+                yield 'error', {'status': 200, 'code': 'REPETITION_ABORT',
+                                'message': '回复出现持续重复，已停止；已收到内容予以保留。'}
+                return ''.join(text), [], usage
         for kind, chunk in splitter.flush():
             if kind == 'delta': text.append(chunk)
             yield kind, chunk
