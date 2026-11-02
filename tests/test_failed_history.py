@@ -53,3 +53,27 @@ class FailedHistoryTest(unittest.TestCase):
             c=connect()
             try:self.assertEqual(c.execute('SELECT content FROM messages WHERE id=1').fetchone()[0],failed)
             finally:c.close()
+    def test_context_omissions_are_session_scoped_assistant_only_and_reversible(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'omissions.sqlite';c=sqlite3.connect(path)
+            c.executescript('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);'
+                'CREATE TABLE conversation_summaries(session_id INTEGER,covered_through_message_id INTEGER,raw_overlap_count INTEGER);'
+                'CREATE TABLE messages(id INTEGER,session_id INTEGER,role TEXT,content TEXT,attachments TEXT,tool_log TEXT,created_at TEXT,proactive INTEGER,versions TEXT,active INTEGER);')
+            for mid,sid,role,text in [(1,1,'assistant','approved omission'),(2,1,'user','keep user'),(3,1,'assistant','keep normal'),(4,2,'assistant','other session')]:
+                c.execute('INSERT INTO messages VALUES (?,?,?,?,?,?,?,0,?,0)',(mid,sid,role,text,'[]','','2026-01-01 09:00:00','[]'))
+            c.execute('INSERT INTO settings VALUES (?,?)',('chat_context_omissions_v1',json.dumps({'1':[1,2],'2':[]})))
+            c.commit();c.close()
+            def connect():
+                conn=sqlite3.connect(path);conn.row_factory=sqlite3.Row;return conn
+            with mock.patch('chat_engine._connect',side_effect=connect),mock.patch('chat_engine._replay_tool_payloads',return_value={}):
+                first=chat_engine.get_history(1,include_images=False)
+                self.assertFalse(any(m['content']=='approved omission' for m in first))
+                self.assertTrue(any('keep user' in m['content'] for m in first))
+                self.assertTrue(any('keep normal' in m['content'] for m in first))
+                self.assertTrue(any('other session' in m['content'] for m in chat_engine.get_history(2,include_images=False)))
+                c=connect();c.execute('DELETE FROM settings');c.commit();c.close()
+                restored=chat_engine.get_history(1,include_images=False)
+                self.assertTrue(any(m['content']=='approved omission' for m in restored))
+            c=connect()
+            try:self.assertEqual(c.execute('SELECT count(*) FROM messages').fetchone()[0],4)
+            finally:c.close()

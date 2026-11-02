@@ -968,6 +968,19 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
     if limit is not None:
         rows = list(reversed(rows))
 
+    # Operator/user-approved, reversible context-only omissions. Never hide user
+    # input or alter stored messages, versions, summaries or the UI history.
+    try:
+        setting = conn.execute("SELECT value FROM settings WHERE key=?",
+                               ("chat_context_omissions_v1",)).fetchone()
+        policy = json.loads(setting[0] or "{}") if setting else {}
+        ids = policy.get(str(session_id), []) if isinstance(policy, dict) else []
+        omitted = {value for value in ids[:500] if type(value) is int and value > 0} if isinstance(ids, list) else set()
+    except (sqlite3.Error, ValueError, TypeError):
+        omitted = set()
+    if omitted:
+        rows = [row for row in rows if row["role"] != "assistant" or row["id"] not in omitted]
+
     descriptions = {}
     message_ids = [r["id"] for r in rows if r["role"] == "user"]
     if message_ids:
