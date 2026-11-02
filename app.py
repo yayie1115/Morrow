@@ -4207,6 +4207,9 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             fmt = provider[2] if provider else ""
             base = (provider[3] if provider else "") or ""
             endpoint = base.rstrip("/") + ("/messages" if fmt == "claude" else "/chat/completions")
+            if fmt == "gemini":
+                import gemini_native
+                endpoint = gemini_native.endpoint(base, used_model)
             ledger.execute(
                 "INSERT INTO http_request_logs (provider_id,provider_name,format,model,endpoint,ok,"
                 "error_type,error,req_bytes,msg_count) VALUES (?,?,?,?,?,0,'ClientDisconnect',?,0,0)",
@@ -6131,6 +6134,16 @@ def _clean_models(raw):
             "price_cache_write": _price_num(m.get("price_cache_write")),
             "price_cache_write_1h": _price_num(m.get("price_cache_write_1h")),
         })
+        for key, ceiling in (("temperature", 2.0), ("top_p", 1.0)):
+            value = m.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= number <= ceiling:
+                out[-1][key] = number
     return out
 
 
@@ -6268,7 +6281,7 @@ def create_provider():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name required"}), 400
-    fmt = "claude" if data.get("format") == "claude" else "openai"
+    fmt = data.get("format") if data.get("format") in ("openai", "claude", "gemini") else "openai"
     db = get_db()
     nxt = db.execute(
         "SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM providers"
@@ -6302,7 +6315,7 @@ def update_provider(pid):
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name required"}), 400
-    fmt = "claude" if data.get("format") == "claude" else "openai"
+    fmt = data.get("format") if data.get("format") in ("openai", "claude", "gemini") else "openai"
     db.execute(
         "UPDATE providers SET name = ?, format = ?, api_key = ?, api_url = ?, "
         "cache = ?, cache_mode = ?, models = ? WHERE id = ?",
@@ -6671,7 +6684,7 @@ def update_assistant_settings():
         })
         if key == "night":
             current[key]["format"] = (
-                item.get("format") if item.get("format") in ("openai", "claude") else ""
+                item.get("format") if item.get("format") in ("openai", "claude", "gemini") else ""
             )
         if key == "vision":
             current[key]["enabled"] = bool(item.get("enabled"))
@@ -10243,6 +10256,10 @@ def fetch_provider_models():
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
         else:
             headers = {"Authorization": f"Bearer {key}"}
+        if fmt == "gemini":
+            import gemini_native
+            url = gemini_native.api_root(url)
+            headers = {"x-goog-api-key": key}
         resp = requests.get(f"{url}/models", headers=headers, timeout=15)
     except requests.RequestException as e:
         return jsonify({"error": f"连不上：{e}"}), 502
@@ -10252,12 +10269,12 @@ def fetch_provider_models():
         body = resp.json()
     except ValueError:
         return jsonify({"error": "返回的不是 JSON"}), 502
-    items = body.get("data") if isinstance(body, dict) else None
+    items = (body.get("models") if fmt == "gemini" else body.get("data")) if isinstance(body, dict) else None
     if not isinstance(items, list):
         items = body if isinstance(body, list) else []
     ids = []
     for it in items:
-        mid = it.get("id") if isinstance(it, dict) else None
+        mid = (it.get("name", "").removeprefix("models/") if fmt == "gemini" else it.get("id")) if isinstance(it, dict) else None
         if mid:
             ids.append(mid)
     return jsonify({"models": ids})

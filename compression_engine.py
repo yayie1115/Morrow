@@ -224,7 +224,24 @@ def summarize(old_summary, messages, *, provider_id, model, think=False, prompt=
         parts.append("【本次附加说明】\n" + instruction.strip())
     system = (prompt or "").strip() or DEFAULT_PROMPT
     user = "\n\n".join(parts) + f"\n\n请将新摘要控制在约 {target_tokens} Token，直接输出新摘要正文。"
-    if provider.get("format") == "claude":
+    if provider.get("format") == "gemini":
+        import gemini_native
+        metadata = {"id": provider.get("id"), "name": provider.get("name"), "format": "gemini"}
+        gen = gemini_native.stream(chat_engine, provider["base_url"], provider["api_key"], model,
+                                  [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                                  think, metadata, tool_definitions=[], max_tokens=_output_budgets(target_tokens)[0])
+        failed = False
+        try:
+            while True:
+                kind, value = next(gen)
+                if kind == "error": failed = True
+        except StopIteration as done:
+            text, calls, usage = done.value or ("", [], None)
+        items = [_usage_item(provider, model, usage)] if usage else []
+        if failed or calls or not text.strip():
+            raise CompressionError("Gemini 压缩回复不完整，未保存摘要或推进边界。", usage_items=items)
+        summary = SummaryResult(text.strip(), items)
+    elif provider.get("format") == "claude":
         summary = _anthropic_summary(provider, model, system, user, think, target_tokens)
     else:
         summary = _openai_summary(provider, model, system, user, think, target_tokens)

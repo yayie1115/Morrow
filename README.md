@@ -170,3 +170,13 @@ The backend uses an authenticated loopback tunnel to the Windows analyzer, not M
 Configure a backend-only `EARS_KEY_FILE` and optionally `EARS_LOCAL_PORT`; never expose the key to frontend code.
 See `scripts/local_ears/README.md`. Without the analyzer or a working tunnel, ordinary text chat remains available.
 Audio interpretation uses the current chat model: chart reading additionally requires image input support.
+
+### Gemini 原生协议
+
+模型提供方的“兼容格式”可选择 Gemini 原生。API URL 填供应商文档给出的 Gemini 原生根地址，支持自动补上 `/v1beta`；模型 ID 保持供应商要求的完整形式。
+
+展开具体模型可设置温度（0–2）和 Top-P（0–1），留空使用模型默认值，保存提供商后生效。参数保存在现有模型配置 JSON 中，不需要数据库迁移。当前这两个输入仅用于 Gemini 原生聊天请求。
+
+原生聊天支持流式正文、供应商提供的思考摘要、工具续轮和缓存用量归一；深度思考开启时请求较高思考强度，关闭时保留模型默认强度，不承诺关闭内部思考。四类主要安全阈值沿用现有不拦截配置；平台及模型其他限制仍然适用。思考签名只在当前工具循环原样传递；缺少原生签名的历史工具记录作为带标签的文字资料提供，不伪造签名。
+
+本适配没有增加显式缓存对象管理或 Keeper，亦未新增直接音视频理解或原生图像生成界面。

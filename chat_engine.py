@@ -536,7 +536,7 @@ def get_provider(provider_id):
     try:
         conn = _connect()
         row = conn.execute(
-            "SELECT id, name, api_url, api_key, format, cache, cache_mode FROM providers WHERE id = ?",
+            "SELECT id, name, api_url, api_key, format, cache, cache_mode, models FROM providers WHERE id = ?",
             (provider_id,),
         ).fetchone()
         conn.close()
@@ -552,6 +552,7 @@ def get_provider(provider_id):
         "cache_mode": row["cache_mode"] or ("anthropic_explicit_sticky" if row["cache"] else "none"),
         "id": row["id"],
         "name": row["name"],
+        "models": json.loads(row["models"] or "[]"),
     }
 
 
@@ -1643,13 +1644,13 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
     provider = serein_connection.provider(get_provider(provider_id),model or LLM_MODEL)
     if provider:
         base_url, api_key, fmt = provider["base_url"], provider["api_key"], provider["format"]
-        if format_override in ("openai", "claude"):
+        if format_override in ("openai", "claude", "gemini"):
             fmt = format_override
         provider_meta = {"id": provider["id"], "name": provider["name"], "format": fmt,
                          "cache_mode": provider.get("cache_mode") or "none"}
     else:
         base_url, api_key, fmt = LLM_BASE_URL, LLM_API_KEY, "openai"
-        if format_override in ("openai", "claude"):
+        if format_override in ("openai", "claude", "gemini"):
             fmt = format_override
         provider_meta = {"id": None, "name": "env", "format": fmt, "cache_mode": "none"}
 
@@ -1658,6 +1659,10 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
         return
 
     chosen = model or LLM_MODEL
+    if fmt == "gemini":
+        selected = next((m for m in (provider or {}).get("models", []) if m.get("id") == chosen), {})
+        provider_meta["generation"] = {key: selected[key] for key in ("temperature", "top_p")
+                                       if selected.get(key) is not None}
     recall_query = latest_user_text(session_id, exclude_id=exclude_id)
     system_sections = build_system_sections(
         recall_query, recall_session_id=session_id,
@@ -1817,7 +1822,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
                 yield ("usage", {
                     "provider": provider_meta,
                     "model": model,
-                    "format": "openai",
+                    "format": provider_meta.get("format") or "openai",
                     "usage": usage or {},
                 })
             if retry_text_only and not stripped_once:
@@ -1840,6 +1845,8 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
                 "id": c["id"], "type": "function",
                 "function": {"name": c["name"], "arguments": c["arguments"]},
             } for c in tool_calls],
+            **({"_gemini_parts": tool_calls[0]["_gemini_parts"]}
+               if tool_calls and "_gemini_parts" in tool_calls[0] else {}),
         })
         round_events = []
         for c in tool_calls:
@@ -1910,7 +1917,7 @@ def _run_openai_tool_loop(base_url, api_key, model, system, history, think, sess
     yield ("usage", {
         "provider": provider_meta,
         "model": model,
-        "format": "openai",
+        "format": provider_meta.get("format") or "openai",
         "usage": usage or {},
     })
     for c in closing_calls:
@@ -2347,6 +2354,11 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
     """One streaming round. Yields ("reasoning"|"delta", text) for streamed
     content; returns (content_text, tool_calls) where tool_calls is a list of
     {id, name, arguments(JSON str)} accumulated from the stream (empty if none)."""
+    if (provider_meta or {}).get("format") == "gemini":
+        import gemini_native
+        return (yield from gemini_native.stream(
+            __import__(__name__), base_url, api_key, model, messages, think,
+            provider_meta, tool_definitions=tool_definitions))
     payload = {"model": model, "messages": _compat_prompt_messages(_bounded_tool_context(messages)), "stream": True,
                "stream_options": {"include_usage": True},
                "max_tokens": CHAT_MAX_TOKENS}
