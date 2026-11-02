@@ -4341,6 +4341,9 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             try:
                 yield _sse({"type": "reasoning", "content": payload})
             except GeneratorExit:
+                close_stream = getattr(stream_events, "close", None)
+                if close_stream is not None:
+                    close_stream()
                 persist_stream_checkpoint("页面连接在回复中断开")
                 record_client_disconnect()
                 raise
@@ -4404,6 +4407,10 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             continue
         elif kind == "error":
             stream_error = payload if isinstance(payload, dict) else {"message": str(payload)}
+            # Close the suspended transport so its finally logs/cleans up now.
+            close_stream = getattr(stream_events, "close", None)
+            if close_stream is not None:
+                close_stream()
             break
         else:  # delta（正文）
             if reasoning_started_at is not None and reasoning_ms is None:
@@ -4414,6 +4421,9 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             try:
                 yield _sse({"type": "delta", "content": payload})
             except GeneratorExit:
+                close_stream = getattr(stream_events, "close", None)
+                if close_stream is not None:
+                    close_stream()
                 persist_stream_checkpoint("页面连接在回复中断开")
                 record_client_disconnect()
                 raise

@@ -20,6 +20,7 @@ import requests
 
 import mcp_client
 import tools
+import request_trace
 import voice_engine
 import serein_connection
 import tool_context
@@ -1659,6 +1660,8 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
         return
 
     chosen = model or LLM_MODEL
+    provider_meta["trace_session_id"] = session_id
+    provider_meta["trace_user_message_id"] = current_user_message_id
     if fmt == "gemini":
         selected = next((m for m in (provider or {}).get("models", []) if m.get("id") == chosen), {})
         provider_meta["generation"] = {key: selected[key] for key in ("temperature", "top_p")
@@ -2231,6 +2234,8 @@ def _looks_like_image_type_error(status_code, detail):
 
 def _log_http_request(provider_meta, model, endpoint, ok, status_code=None, elapsed_ms=None,
                       error_type="", error="", req_bytes=0, msg_count=0):
+    if request_trace.legacy(error_type=error_type, ok=ok):
+        return
     try:
         conn = _connect()
         conn.execute(
@@ -2349,6 +2354,7 @@ def _looks_like_runaway(text):
     return False
 
 
+@request_trace.traced
 def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta,
                         tool_definitions=None):
     """One streaming round. Yields ("reasoning"|"delta", text) for streamed
@@ -2382,7 +2388,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
     req_bytes = _payload_size(payload)
     started = time.monotonic()
     try:
-        resp = requests.post(
+        resp = request_trace.post(requests.post,
             endpoint,
             headers=headers,
             json=payload,
@@ -2416,7 +2422,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
             req_bytes = _payload_size(payload)
             started = time.monotonic()
             try:
-                resp = requests.post(
+                resp = request_trace.post(requests.post,
                     endpoint,
                     headers=headers,
                     json=payload,
@@ -2470,6 +2476,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
                 obj = json.loads(data)
             except json.JSONDecodeError:
                 continue
+            request_trace.response_id(obj.get("id"))
             if obj.get("error"):
                 err = obj.get("error")
                 status = err.get("code") if isinstance(err, dict) else None
@@ -2778,6 +2785,7 @@ def _anthropic_cache_debug(event, provider_meta, model, cache_ttl, cache_mode, s
         pass
 
 
+@request_trace.traced
 def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, think,
                            provider_meta, cache_ttl="off", tool_schemas=None,
                            cache_profile="", cache_history_messages=0):
@@ -2834,7 +2842,7 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
                            stable, volatile, payload=payload)
     started = time.monotonic()
     try:
-        resp = requests.post(
+        resp = request_trace.post(requests.post,
             endpoint,
             headers=headers,
             json=payload,

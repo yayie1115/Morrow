@@ -7,6 +7,7 @@ import uuid
 from urllib.parse import quote
 
 import requests
+import request_trace
 
 
 def api_root(base_url):
@@ -99,6 +100,7 @@ def payload(engine, model, messages, think, definitions, max_tokens=None):
     return result
 
 
+@request_trace.traced
 def stream(engine, base_url, api_key, model, messages, think, provider_meta, tool_definitions=None, max_tokens=None):
     started = time.monotonic()
     url = endpoint(base_url, model)
@@ -115,7 +117,7 @@ def stream(engine, base_url, api_key, model, messages, think, provider_meta, too
                 if not 0 <= number <= ceiling:
                     raise ValueError("Invalid generation parameter")
                 body["generationConfig"][native_key] = number
-        response = requests.post(url, headers={'x-goog-api-key': api_key, 'Content-Type': 'application/json'},
+        response = request_trace.post(requests.post, url, headers={'x-goog-api-key': api_key, 'Content-Type': 'application/json'},
                                  json=body, stream=True, timeout=engine.REQUEST_TIMEOUT)
         if response.status_code != 200:
             yield 'error', {'status': response.status_code, 'message': engine._http_error_reason(response)}
@@ -126,6 +128,7 @@ def stream(engine, base_url, api_key, model, messages, think, provider_meta, too
             data = line[5:].strip()
             if not data or data == '[DONE]': continue
             obj = json.loads(data)
+            request_trace.response_id(obj.get("responseId"))
             if obj.get('error'):
                 failed = True
                 yield 'error', {'status': (obj['error'] or {}).get('code'), 'message': 'Gemini 上游流式请求失败。'}
