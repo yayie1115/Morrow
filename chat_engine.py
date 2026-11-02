@@ -886,6 +886,27 @@ def _replay_tool_payloads(rows, budget=TOOL_REPLAY_BUDGET_CHARS, max_rows=HISTOR
     return payloads
 
 
+def _history_assistant_text(row):
+    """Do not replay failed generated drafts as completed assistant speech.
+
+    The stored message and all versions remain available in the UI. Successful
+    tool outcomes are replayed separately by get_history and are not discarded.
+    """
+    content = row["content"] or ""
+    if row["role"] != "assistant":
+        return content
+    try:
+        versions = json.loads(row["versions"] or "[]")
+        active = max(0, min(int(row["active"] or 0), len(versions) - 1))
+        version = versions[active] if versions else {}
+        failed = isinstance(version, dict) and bool(version.get("error") or version.get("partial"))
+    except (TypeError, ValueError, IndexError, KeyError):
+        failed = False
+    if failed or _looks_like_runaway(content):
+        return "【该条助手回复未完成或因持续重复中止，失败正文未作为正常历史重放。】"
+    return content
+
+
 def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images=True,
                 image_limit=None, latest_images_only=False, image_variant="original",
                 current_user_message_id=None):
@@ -1026,10 +1047,12 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
     tool_blocks = _replay_tool_payloads(rows, max_rows=limit or HISTORY_LIMIT)
 
     def with_artifact_recap(row):
-        content = row["content"] or ""
+        content = _history_assistant_text(row)
         recap = artifact_recaps.get(row["id"])
         if not recap:
             return content
+        if content != (row["content"] or ""):
+            return content + "\n\n" + recap["text"]
         if recap.get("legacy_replace"):
             return recap["text"]
         before, after = content[:recap["offset"]].rstrip(), content[recap["offset"]:].lstrip()
