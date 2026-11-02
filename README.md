@@ -12,6 +12,7 @@ The interface is currently Chinese-first. The codebase is a Flask application wi
 - Multiple conversations, branching, continuation windows, message versions, editing, regeneration, and export
 - Persona and memory management, summaries, image descriptions, and optional MCP tools
 - Notes, todos, weather, diary, keepsakes, listening history, cycle records, and voice letters
+- Keepsakes combining up to 10 individual text bubbles and already-sent photos, with shared manual/assistant capture and independent photo copies
 - Scheduled room activity, proactive messages, one-shot reminders, and Web Push
 - Encrypted ZIP and optional GitHub Release backups
 - PWA support for desktop and mobile installation

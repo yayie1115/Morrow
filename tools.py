@@ -1663,7 +1663,7 @@ def create_keepsake(args, session_id):
     import keepsake_capture
     from contextlib import closing
     with closing(_connect()) as conn:
-        try:return _kept_json(keepsake_capture.create(conn,args,session_id,_keepsake_snapshot_message))
+        try:return _kept_json(keepsake_capture.create(conn,args,session_id,_keepsake_snapshot_message,uploads_dir=os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")))
         except ValueError as error:return f"（留影创建失败：{error}）"
 
 
@@ -2066,19 +2066,20 @@ _REGISTRY = {
             "reason":{"type":"string","maxLength":160}},"required":["item","cents","reason"]},
     }),
     "read_keepsake_candidates": (read_keepsake_candidates, "找出当前对话可留下的片段", {
-        "description": "创建留影前先读取当前对话已保存消息的真实 message_id、source_token、有效版本和是否已留影。不能访问其他对话；尚未保存的本轮回复没有 ID。默认最近5条，可用 before_message_id 向前翻页。不要向用户索要内部ID，也不要凭空猜测ID。",
+        "description": "创建留影前先读取当前对话已保存消息的真实 message_id、source_token 和 parts。每个 parts 项是单个文字气泡或已发送照片，item_id 用于选择；已留影项不可重复选。不能访问其他对话；尚未保存的本轮回复没有 ID。默认最近5条，可用 before_message_id 向前翻页。不要向用户索要内部ID，也不要凭空猜测ID。",
         "parameters": {"type":"object","properties":{
             "count":{"type":"integer","minimum":1,"maximum":10},
             "before_message_id":{"type":"integer","minimum":1}},"required":[]},
     }),
     "create_keepsake": (create_keepsake, "把一页收成留影", {
-        "description": "从当前对话选1到10条已保存消息创建留影。先调用 read_keepsake_candidates，使用其真实 message_id 和 source_token。不能选择未落盘回复、隐藏消息或其他会话。来源变化需重新读取。相同选择重试只返回已有留影，不重复创建或留言。只在工具返回 ok=true 后确认保存。",
+        "description": "从当前对话选1到10个文字气泡或已发送照片混合创建留影：优先传 selections=[{message_id,item_id}]，编号必须来自 read_keepsake_candidates 的 parts。也兼容 message_ids 整条收录；两种方式选一种。照片只选已发送的，不上传新图片。先调用 read_keepsake_candidates，使用其真实 message_id 和 source_token。不能选择未落盘回复、隐藏消息或其他会话。来源变化需重新读取。相同选择重试只返回已有留影，不重复创建或留言。只在工具返回 ok=true 后确认保存。",
         "parameters": {"type":"object","properties":{
+            "selections":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"object","properties":{"message_id":{"type":"integer","minimum":1},"item_id":{"type":"string"}},"required":["message_id","item_id"]}},
             "message_ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":10},
             "source_tokens":{"type":"object","additionalProperties":{"type":"string"},"description":"消息ID字符串到候选source_token的映射"},
             "caption":{"type":"string","maxLength":1000},
             "pinned":{"type":"boolean"},
-            "assistant_reply":{"type":"string","maxLength":2000}},"required":["message_ids","source_tokens"]},
+            "assistant_reply":{"type":"string","maxLength":2000}},"required":["source_tokens"]},
     }),
     "favorite_music": (favorite_music, "把一张唱片收进我们的收藏", {
         "description": (

@@ -10605,6 +10605,20 @@ def _keepsake_snapshot_message(db, row):
     }
 
 
+@app.get("/api/keepsakes/candidates")
+@require_auth
+def keepsake_candidates():
+    import keepsake_capture
+    try:
+        sid = keepsake_capture._id(request.args.get("session_id"))
+        args = {"count": int(request.args.get("count", "10"))}
+        if request.args.get("before_message_id"):
+            args["before_message_id"] = keepsake_capture._id(request.args["before_message_id"])
+        return jsonify(keepsake_capture.candidates(get_db(), args, sid, _keepsake_snapshot_message, full=True))
+    except (TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+
+
 @app.get("/api/keepsakes")
 @require_auth
 def list_keepsakes():
@@ -10627,6 +10641,16 @@ def get_keepsake(keepsake_id):
 @require_auth
 def create_keepsake():
     data = request.get_json(silent=True) or {}
+    if "selections" in data:
+        import keepsake_capture
+        try:
+            sid = keepsake_capture._id(data.get("session_id"))
+            args = dict(data, caption=data.get("note", data.get("caption", "")))
+            result = keepsake_capture.create(get_db(), args, sid, _keepsake_snapshot_message, uploads_dir=UPLOAD_DIR)
+            row = get_db().execute("SELECT * FROM keepsakes WHERE id=?", (result["keepsake_id"],)).fetchone()
+            return jsonify(_keepsake_payload(row, get_db())), 200 if result.get("already_saved") else 201
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 409
     try:
         session_id = int(data.get("session_id"))
         message_ids = list(dict.fromkeys(int(value) for value in (data.get("message_ids") or [])))

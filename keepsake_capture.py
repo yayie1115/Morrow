@@ -22,7 +22,7 @@ def _kept(conn):
         except (ValueError,TypeError):continue
     return result
 
-def candidates(conn,args,session_id,snapshot_message):
+def candidates(conn,args,session_id,snapshot_message,full=False):
     if session_id is None:raise ValueError("需要当前对话，不能读取其他对话。")
     if not conn.execute("SELECT 1 FROM sessions WHERE id=?",(session_id,)).fetchone():raise ValueError("当前对话不存在。")
     count=args.get("count",5)
@@ -41,11 +41,18 @@ def candidates(conn,args,session_id,snapshot_message):
                 "active_version":int(row["active"] or 0),"preview":str(snap["content"])[:240],
                 "has_media":bool(snap["attachments"] or snap["artifacts"]),"already_kept":row["id"] in kept,
                 "keepsake_id":kept.get(row["id"]),"source_token":_token(row,snap)})
+        import keepsake_selection
+        for item in items:
+            row = next(r for r in rows if r["id"] == item["message_id"])
+            keepsake_selection.annotate(conn,item,snapshot_message(conn,row),full=full)
         return {"ok":True,"items":items,"has_more":more,"next_before_message_id":rows[-1]["id"] if more else None,
             "notice":"仅列出当前对话已保存的可见消息。正在生成的回复尚无可收录 ID；需要保存成功后再读取。用真实 message_id 和 source_token 创建留影，不要猜测 ID。"}
     finally:conn.rollback()
 
-def create(conn,args,session_id,snapshot_message):
+def create(conn,args,session_id,snapshot_message,uploads_dir=None):
+    if "selections" in args:
+        import keepsake_selection
+        return keepsake_selection.create(conn,args,session_id,snapshot_message,_token,_id,uploads_dir)
     if session_id is None:raise ValueError("需要先有当前对话。")
     raw=args.get("message_ids")
     if not isinstance(raw,list) or not 1<=len(raw)<=10:raise ValueError("需要 1 到 10 条消息 ID。")
