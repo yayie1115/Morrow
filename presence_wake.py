@@ -4,6 +4,7 @@ from datetime import datetime
 import alarm_engine
 import chat_engine
 import presence_tone
+import presence_audit
 
 QUIET='[[暂不发送]]'
 PROTOCOL='''【积温主动唤醒】
@@ -16,11 +17,15 @@ PROTOCOL='''【积温主动唤醒】
 
 def wake(*,session_id,source='presence',provider_id=None,model='',think=False,
          context_limit=None,image_limit=None,latest_images_only=False,cache_ttl='off',fallback=None,now=None):
-    result=alarm_engine._wake_attempt(
-        session_id=session_id,event='积温提示：此刻想主动联系对方。请结合当前对话自行决定行动和表达。',
+    snapshot={}
+    hint=presence_tone.read(chat_engine.DB_PATH,snapshot=snapshot)
+    event='积温提示：此刻想主动联系对方。请结合当前对话自行决定行动和表达。'
+    audit_id=presence_audit.start(chat_engine.DB_PATH,session_id,'contact',snapshot,hint,PROTOCOL,event)
+    result=presence_audit.invoke(chat_engine.DB_PATH,audit_id,alarm_engine._wake_attempt,
+        session_id=session_id,event=event,
         provider_id=provider_id,model=model,think=think,context_limit=context_limit,
         image_limit=image_limit,latest_images_only=latest_images_only,cache_ttl=cache_ttl,
-        protocol=PROTOCOL,volatile_extra=presence_tone.read(chat_engine.DB_PATH),
+        protocol=PROTOCOL,volatile_extra=hint,
         max_tool_rounds=8,max_elapsed_seconds=180)
     text=str(result.get('message') or '').strip()
     quiet=text==QUIET or (not text and result.get('material') and result.get('error')=='Morrow醒来后没有留下话')
@@ -31,6 +36,7 @@ def wake(*,session_id,source='presence',provider_id=None,model='',think=False,
     # Never switch models or retry after tools may already have performed writes.
     result['no_retry']=bool(result.get('material') or result.get('tool_log'))
     result['used_fallback']=False
+    result['presence_audit_id']=audit_id
     return result
 
 

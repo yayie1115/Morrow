@@ -31,7 +31,7 @@ def describe(state):
             '不把推算当成真实发生的事。仍可自行决定暂不发送。')[:600]
 
 
-def read(database,now=None):
+def read(database,now=None,snapshot=None):
     path=Path(database)
     if not path.is_file():return ''
     try:
@@ -45,5 +45,7 @@ def read(database,now=None):
         stamp=datetime.fromisoformat(row[1]);age=(now or datetime.now())-stamp
         if age<timedelta(minutes=-2) or age>timedelta(minutes=30):return ''
         state=json.loads(row[0])
+        if isinstance(snapshot,dict) and isinstance(state,dict):
+            snapshot.update(at=row[1], values={key:state.get(key) for key in ('connection','pride','valence','arousal','immersion','lust')})
         return describe(state) if isinstance(state,dict) else ''
     except (sqlite3.Error,ValueError,TypeError,AttributeError):return ''

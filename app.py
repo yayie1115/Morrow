@@ -64,6 +64,7 @@ import rikkahub_import  # noqa: E402
 import supabase_sync  # noqa: E402
 import night_engine  # noqa: E402
 import presence_wake
+import presence_audit
 import presence_activity
 import presence_contact
 import proactive_engine  # noqa: E402
@@ -7764,7 +7765,8 @@ def _background_study_run(run_id):
                 db.commit()
 
             fallback = {} if row["origin"] == "presence" else _assistant_settings()["night"]
-            result = night_engine.perform_activity(
+            activity_executor = (lambda **kwargs: presence_audit.activity(night_engine.perform_activity, DB_PATH, audit_run_id=run_id, **kwargs)) if row["origin"] == "presence" else night_engine.perform_activity
+            result = activity_executor(
                 session_id=row["session_id"],
                 session_title=row["title"],
                 origin=row["origin"],
@@ -8717,6 +8719,7 @@ def _background_proactive_job(job_id):
         if not _proactive_delivery_enabled(db, row):
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None,
                                 status="cancelled", wanted=False)
+            presence_audit.update(db, result.get("presence_audit_id"), "cancelled")
             db.commit()
             return
         if not result.get("ok"):
@@ -8743,6 +8746,7 @@ def _background_proactive_job(job_id):
             db.commit()
             return
         if result["decision"] == "quiet":
+            presence_audit.update(db, result.get("presence_audit_id"), "quiet")
             if row["kind"] == "presence":
                 presence_contact.record(db, "quiet", "模型选择暂不发送", {"job_id": job_id, "executed": False})
             db.execute(
@@ -8757,6 +8761,7 @@ def _background_proactive_job(job_id):
             (row["plan_date"],),
         ).fetchone()
         if already:
+            presence_audit.update(db, result.get("presence_audit_id"), "skipped")
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None,
                                 status="skipped", wanted=False,
                                 error="当天已有主动消息")
@@ -8787,6 +8792,7 @@ def _background_proactive_job(job_id):
             ),
         )
         proactive_message_id = cur.lastrowid
+        presence_audit.update(db, result.get("presence_audit_id"), "sent", proactive_message_id)
         if row["kind"] == "presence":
             db.execute("UPDATE tool_calls SET message_id=? WHERE session_id=? AND run_id=?", (proactive_message_id, row["target_session_id"], presence_run_id))
             db.execute("UPDATE messages SET tool_log=? WHERE id=?", (json.dumps(result.get("tool_log") or [], ensure_ascii=False), proactive_message_id))
