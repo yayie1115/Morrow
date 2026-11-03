@@ -7,10 +7,12 @@ import sqlite3
 from datetime import datetime
 
 
-def start(database, session_id, purpose, snapshot, hint, protocol, event, run_id=None):
+def start(database, session_id, purpose, snapshot, hint, protocol, event, run_id=None, user_message_id=None):
     detail = dict(version=1, session_id=session_id, purpose=purpose, snapshot=snapshot,
                   state_prompt=hint, protocol=protocol, event=event, run_id=run_id,
                   state_transmitted=bool(hint), status='started')
+    if user_message_id is not None:
+        detail['user_message_id'] = user_message_id
     try:
         with closing(sqlite3.connect(Path(database).resolve().as_uri()+'?mode=rw', uri=True, timeout=2)) as db, db:
             stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

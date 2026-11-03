@@ -65,6 +65,7 @@ import supabase_sync  # noqa: E402
 import night_engine  # noqa: E402
 import presence_wake
 import presence_audit
+import presence_chat
 import presence_activity
 import presence_contact
 import proactive_engine  # noqa: E402
@@ -4142,6 +4143,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     voice_visible_text = ""
     usage_log = []
     stream_error = None
+    presence_audit_id = None
 
     def persist_stream_checkpoint(error="回复尚未收好"):
         """Save text/reasoning before an SSE write can be cut off by the client."""
@@ -4230,6 +4232,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
                 (provider[0] if provider else provider_id, provider[1] if provider else "",
                  fmt, used_model, endpoint, "页面到 Morrow 的回复流在完成前断开"),
             )
+            presence_audit.update(ledger, presence_audit_id, "interrupted", msg_id)
             ledger.commit()
         finally:
             ledger.close()
@@ -4323,13 +4326,14 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     capability_conn = sqlite3.connect(DB_PATH)
     voice_enabled = _voice_capability_enabled(capability_conn)
     capability_conn.close()
+    presence_hint, presence_audit_id = presence_chat.prepare(DB_PATH, session_id, vision_source_msg_id, tool_run_id)
     stream_events = iter(chat_engine.stream_chat(
         session_id, model=model, think=think, exclude_id=regen_id, provider_id=provider_id,
         context_limit=context_limit, image_limit=image_limit,
         latest_images_only=latest_images_only, cache_ttl=cache_ttl,
         mcp_server_ids=mcp_server_ids,
         stable_extra=_artifact_history_prompt(sticker_prompt, voice_enabled),
-        volatile_extra=music_prompt,
+        volatile_extra="\n\n".join(part for part in (music_prompt, presence_hint) if part),
         current_user_message_id=vision_source_msg_id,
         extra_tools=[voice_engine.TOOL_DEFINITION] if voice_enabled else None,
         extra_executor=_voice_letter_executor(session_id, tool_run_id) if voice_enabled else None,
@@ -4466,6 +4470,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
             _insert_usage(conn, session_id, None, u)
         error_receipt = _record_chat_error(conn, session_id, user_msg_id or vision_source_msg_id, tool_run_id,
                                            stream_error.get("message"), stream_error.get("status"))
+        presence_audit.update(conn, presence_audit_id, "failed")
         conn.commit()
         conn.close()
         yield _sse({
@@ -4480,6 +4485,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         for u in usage_log:
             _insert_usage(conn, session_id, None, u)
         error_receipt = _record_chat_error(conn, session_id, user_msg_id or vision_source_msg_id, tool_run_id, "empty response")
+        presence_audit.update(conn, presence_audit_id, "failed")
         conn.commit()
         conn.close()
         yield _sse({"type": "empty", "message": "这次没有收到回答，可以换个渠道再试", "receipt":error_receipt})
@@ -4581,6 +4587,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     push_event = None
     if not partial_error:
         push_event = _create_push_event(conn, session_id, msg_id, "message")
+    presence_audit.update(conn, presence_audit_id, "partial" if partial_error else "sent", msg_id)
     conn.commit()
     conn.close()
     if push_event:
