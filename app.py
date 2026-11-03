@@ -6297,6 +6297,35 @@ def post_tool_index_group():
                     "tools": tools.tool_catalog(config),
                     "groups": tools.tool_groups(config)})
 
+@app.get("/api/serein/registry")
+@require_auth
+def serein_registry_status():
+    import serein_registry
+    return jsonify({**serein_registry.public_status(get_db()),
+                    "available": bool(os.environ.get("MORROW_SEREIN_GATEWAY_CONFIG"))})
+
+
+@app.put("/api/serein/registry")
+@require_auth
+def save_serein_registry():
+    import serein_registry
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict) or type(data.get("enabled")) is not bool:
+        return jsonify({"error": "请设置自动接入开关"}), 400
+    ids = data.get("excluded_provider_ids", [])
+    if not isinstance(ids, list) or len(ids) > 100 or any(type(value) is not int or value <= 0 for value in ids):
+        return jsonify({"error": "供应商例外设置无效"}), 400
+    db = get_db()
+    known = {row[0] for row in db.execute("SELECT id FROM providers")}
+    if set(ids) - known:
+        return jsonify({"error": "供应商已变化，请刷新后重试"}), 409
+    serein_registry.write(db, serein_registry.KEY, {"enabled": data["enabled"], "excluded_provider_ids": sorted(set(ids))})
+    # An explicit save also requests a retry after a previous synchronization failure.
+    serein_registry.write(db, serein_registry.STATUS, {})
+    db.commit()
+    return jsonify({"ok": True, **serein_registry.public_status(db)})
+
+
 @app.get("/api/providers")
 @require_auth
 def list_providers():

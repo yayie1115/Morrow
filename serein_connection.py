@@ -42,6 +42,23 @@ def chat_scope(function):
 def provider(original,model):
     """Only the selected chat route changes; saved provider rows never do."""
     cfg=configuration()
+    if original and _turn.get() is not None and os.environ.get('MORROW_SEREIN_GATEWAY_CONFIG') and os.path.isfile(os.environ.get('DB_PATH', 'data/nook.db')):
+        import sqlite3
+        import serein_registry
+        from contextlib import closing
+        with closing(sqlite3.connect(os.environ.get('DB_PATH', 'data/nook.db'))) as conn:
+            policy = serein_registry.read(conn)
+            if policy and policy.get('enabled') is not True:
+                return original
+            if policy.get('enabled') is True and original['id'] not in policy.get('excluded_provider_ids', []):
+                if serein_registry.eligible(model):
+                    status = serein_registry.public_status(conn)
+                    if status['state'] != 'ready':
+                        raise ValueError('Serein 自动接入正在同步或同步失败，请在模型设置核对接入状态后重试。')
+                    if not cfg or model not in cfg.get('providers', {}).get(str(original['id']), {}):
+                        raise ValueError('当前聊天模型尚未完成 Serein 自动接入，请检查模型设置。')
+            elif policy.get('enabled') is True:
+                return original
     if not original or _turn.get() is None or not cfg:return original
     models=cfg['providers'].get(str(original['id']),{})
     if model not in models:return original
