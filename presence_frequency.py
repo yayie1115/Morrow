@@ -99,8 +99,13 @@ def queue(db, triggers, config, now):
         # message versions and tool receipts retain every completed cycle.
         db.execute("UPDATE proactive_message_jobs SET target_session_id=?,kind='presence',status='planned',planned_at=?,wanted=0,regular_selected=0,morning_selected=0,attempt_count=0,retry_count=1,message_id=NULL,decision='',error='',updated_at=? WHERE id=?",
                    (sid,stamp,stamp,job['id']))
-        record(db, 'queued', ('夜间' if period(now)=='night' else '白天')+'积温联系已排队',
-               {'job_id':job['id'],'period':period(now),'eligible_at':due.strftime('%Y-%m-%d %H:%M:%S'),'executed':False})
+        basis = next((t.get('contact_basis') for t in triggers if isinstance(t, dict) and t.get('action')=='contact' and t.get('contact_basis')), None)
+        reason = ('夜间' if period(now)=='night' else '白天')+'积温联系已排队'
+        detail = {'job_id':job['id'],'period':period(now),'eligible_at':due.strftime('%Y-%m-%d %H:%M:%S'),'executed':False}
+        if basis:
+            detail['contact_basis'] = basis
+            reason += '（亲近意愿也参与了判断）'
+        record(db, 'queued', reason, detail)
         db.commit()
         return job['id']
     except Exception:

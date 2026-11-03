@@ -8867,6 +8867,10 @@ def _presence_start_activity(db, triggers):
 
 def _presence_nudge_proactive(db, triggers):
     """Only jiwen contact creates a deterministic opportunity; no lottery."""
+    import presence_inclination
+    thresholds = getattr(globals().get("presence_engine"), "ENGINE_OPTIONS", {}).get("thresholds", {})
+    triggers = presence_inclination.augment(db, triggers,
+        threshold=thresholds.get("considerContact", .26), pride_block=thresholds.get("prideBlock", 1.))
     if any(isinstance(item, dict) and item.get("action") == "contact" for item in triggers or []):
         job_id = presence_contact.queue(db, triggers, _proactive_settings(db), window=PROACTIVE_ACTIVE_WINDOW)
         if job_id:
