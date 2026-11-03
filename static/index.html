@@ -9079,7 +9079,8 @@ function renderStudySettings(){
     label.querySelector("span").textContent=s.title||"新的聊天";targets.appendChild(label);
   });
   $("#studyRunBtn").disabled=!studySelectedSessionId();
-  $("#studyModelValue").textContent=STUDY_SETTINGS.configured?
+  const modelValue=$("#studyModelValue");
+  if(modelValue)modelValue.textContent=STUDY_SETTINGS.configured?
     (STUDY_SETTINGS.model_name||STUDY_SETTINGS.model||"默认模型"):studyModelLabel();
   const savedLimit=STUDY_SETTINGS.context_limit||60,savedImages=STUDY_SETTINGS.image_limit||4;
   if(document.activeElement!==$("#studyContextInput"))$("#studyContextInput").value=savedLimit;
