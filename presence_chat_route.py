@@ -1,5 +1,6 @@
 """Per-chat runtime metadata; no persona copies, message text or credentials."""
 import json
+import sqlite3
 
 
 def validate(db, data):
@@ -39,4 +40,13 @@ def resolve(db,sid):
         if isinstance(active,dict) and active.get('provider_id') and active.get('model'):
             return validate(db,{'provider_id':active['provider_id'],'model':active['model'],'think':active.get('think',False),
                                 'context_limit':None,'image_limit':None})
+    # Older imported/legacy versions may omit provider metadata. The usage ledger
+    # still identifies the route that actually generated a visible chat reply.
+    try:
+        usage=db.execute("SELECT u.provider_id,u.model FROM api_usage u JOIN messages m ON m.id=u.message_id "
+                         "WHERE u.session_id=? AND m.session_id=? AND m.role='assistant' AND m.hidden=0 AND m.proactive=0 "
+                         "ORDER BY u.id DESC LIMIT 1",(sid,sid)).fetchone()
+    except sqlite3.OperationalError:
+        usage=None
+    if usage:return validate(db,{'provider_id':usage[0],'model':usage[1]})
     raise ValueError('尚无目标聊天的模型设置，请打开该聊天并选择模型后重试')

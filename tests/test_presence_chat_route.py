@@ -26,3 +26,8 @@ class PresenceChatRouteTest(unittest.TestCase):
         with self.assertRaises(ValueError):route.resolve(self.db,1)
     def test_new_empty_session_never_uses_global_proactive_model(self):
         with self.assertRaises(ValueError):route.resolve(self.db,1)
+    def test_legacy_missing_version_metadata_uses_real_chat_usage(self):
+        self.db.execute("INSERT INTO messages VALUES (1,'assistant',0,0,'[]',0,1)")
+        self.db.execute('CREATE TABLE api_usage(id INTEGER,session_id INTEGER,message_id INTEGER,provider_id INTEGER,model TEXT)')
+        self.db.execute("INSERT INTO api_usage VALUES (1,1,1,7,'chat-model')")
+        self.assertEqual(route.resolve(self.db,1)['provider_id'],7)
