@@ -6003,15 +6003,36 @@ def delete_todo(tid):
 # ---------------------------------------------------------------------------
 # 整理 / tidy —— 工具调用时间线（墙后面账本：chat 只见叙事，这里见全貌）
 # ---------------------------------------------------------------------------
+@app.get("/api/tidy/<int:call_id>")
+@require_auth
+def get_tidy_detail(call_id):
+    row = get_db().execute("SELECT id,args,result,error FROM tool_calls WHERE id=?", (call_id,)).fetchone()
+    return jsonify(dict(row)) if row else (jsonify({"error": "这条记录不存在"}), 404)
+
+
 @app.get("/api/tidy")
 @require_auth
 def get_tidy():
     db = get_db()
-    rows = db.execute(
-        "SELECT id, session_id, message_id, run_id, tool, narrate, args, result, "
-        "source, server, status, duration_ms, error, created_at "
-        "FROM tool_calls ORDER BY id DESC LIMIT 200"
-    ).fetchall()
+    compact = request.args.get("view") == "compact"
+    try:
+        limit = int(request.args.get("limit", "40")) if compact else 200
+        before = int(request.args["before"]) if compact and "before" in request.args else None
+        if not 1 <= limit <= 100 and compact or before is not None and before <= 0:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"error": "分页参数无效"}), 400
+    columns = "id, session_id, message_id, run_id, tool, narrate, source, server, status, duration_ms, created_at"
+    if not compact:
+        columns += ", args, result, error"
+    sql = "SELECT " + columns + " FROM tool_calls"
+    params = []
+    if before is not None:
+        sql += " WHERE id<?"
+        params.append(before)
+    rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit + int(compact))).fetchall()
+    has_more = compact and len(rows) > limit
+    rows = rows[:limit]
     message_versions = {}
     message_ids = sorted({int(r["message_id"]) for r in rows if r["message_id"] is not None})
     if message_ids:
@@ -6034,6 +6055,8 @@ def get_tidy():
         # calls explicitly remain open until their reply version is finalized.
         item["run_complete"] = not bool(matching and matching.get("partial"))
         result.append(item)
+    if compact:
+        return jsonify({"items": result, "next_before": rows[-1]["id"] if has_more else None})
     return jsonify(result)
 
 

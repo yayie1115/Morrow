@@ -8825,35 +8825,9 @@ async function loadNight(mode=tidyMode){
   if(tidyMode==="alarm")return loadAlarmDrawer();
   if(tidyMode==="together")return loadMusicListeningArchive();
   if(drawerMode){DRAWER_KIND=tidyMode;return loadArtifactDrawer();}
-  const box=$("#tidyToolList");
-  box.innerHTML='<div class="tidy-empty">加载中…</div>';
-  let list=[];try{list=await(await api("/api/tidy")).json();}catch{}
-  if(!list.length){const empty=document.createElement("div");empty.className="tidy-empty";empty.textContent="还没有动静～"+assistantName()+"帮你读写便签/待办/记忆、查天气的记录会出现在这里。";box.replaceChildren(empty);return;}
-  const byRun=new Map();
-  list.forEach(t=>{
-    const key=t.run_id||("message:"+String(t.message_id??t.id));
-    if(!byRun.has(key))byRun.set(key,[]);
-    byRun.get(key).push(t);
-  });
-  const runs=[...byRun.values()].map(items=>{
-    items.sort((a,b)=>String(a.created_at||"").localeCompare(String(b.created_at||""))||Number(a.id)-Number(b.id));
-    return {items,start:items[0]?.created_at||"",end:items.at(-1)?.created_at||"",
-      newestId:Math.max(...items.map(t=>Number(t.id)||0))};
-  }).sort((a,b)=>b.newestId-a.newestId);
-  const byDay=new Map();
-  runs.forEach(run=>{
-    const day=run.start.slice(0,10)||"日期不详";
-    if(!byDay.has(day))byDay.set(day,[]);
-    byDay.get(day).push(run);
-  });
-  box.innerHTML="";
-  byDay.forEach((dayRuns,day)=>{
-    const h=document.createElement("div");h.className="tidy-day";h.textContent=day;box.appendChild(h);
-    const timeline=document.createElement("div");timeline.className="tool-day-timeline";
-    dayRuns.forEach(run=>timeline.appendChild(renderToolRun(run)));
-    box.appendChild(timeline);
-  });
+  return window.sakieTidyTools.load();
 }
+
 function renderToolRun(run){
   const card=document.createElement("article");card.className="tool-run";
   const hasError=run.items.some(t=>t.status==="error");card.classList.toggle("has-error",hasError);
@@ -10993,5 +10967,6 @@ document.addEventListener("touchmove",event=>{
 </script>
 <script src="/static/gemini-provider-settings.js?v=1"></script>
 <script src="/static/keepsake-selection.js?v=1"></script>
+<script src="/static/tidy-tools-fast.js?v=1"></script>
 </body>
 </html>
