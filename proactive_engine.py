@@ -86,6 +86,10 @@ def _decide_attempt(*, session_id, source, provider_id=None, model="", think=Fal
     error = ""
     usage = []
     first_at = ""
+    tone_context = ""
+    if source == "presence":
+        import presence_tone
+        tone_context = presence_tone.read(chat_engine.DB_PATH)
     for kind, payload in chat_engine.stream_chat(
         session_id,
         model=model or None,
@@ -97,6 +101,7 @@ def _decide_attempt(*, session_id, source, provider_id=None, model="", think=Fal
         cache_ttl=cache_ttl,
         ephemeral_user_message=event_message(source, now),
         stable_extra=PROTOCOL,
+        volatile_extra=tone_context,
         max_tool_rounds=1,
         allow_tools=False,
         format_override=format_override,
