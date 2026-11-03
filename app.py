@@ -4082,6 +4082,16 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     (and exclude it from the context) instead of inserting a fresh message —
     that's how 重新生成 accumulates switchable versions.
     """
+    if provider_id is not None and model:
+        import presence_chat_route
+        try:
+            with app.app_context():
+                presence_chat_route.save(get_db(), session_id, {
+                    "provider_id": int(provider_id), "model": model, "think": bool(think),
+                    "context_limit": context_limit, "image_limit": image_limit,
+                    "latest_images_only": latest_images_only, "cache_ttl": cache_ttl})
+        except (ValueError, TypeError):
+            pass  # Invalid optional metadata must never change ordinary chat behavior.
     _ombre_auto_sync_check(max_age_seconds=600)
     title_conn = sqlite3.connect(DB_PATH)
     title_row = title_conn.execute(
@@ -6325,6 +6335,19 @@ def save_serein_registry():
     serein_registry.write(db, serein_registry.STATUS, {})
     db.commit()
     return jsonify({"ok": True, **serein_registry.public_status(db)})
+
+
+@app.put("/api/chat/sessions/<int:sid>/runtime")
+@require_auth
+def save_chat_runtime(sid):
+    import presence_chat_route
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "聊天模型设置无效"}), 400
+    try:
+        return jsonify({"ok": True, **presence_chat_route.save(get_db(), sid, data)})
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.get("/api/providers")
@@ -8633,8 +8656,19 @@ def _background_proactive_job(job_id):
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None, status="cancelled", wanted=False)
             db.commit()
             return
-        config = _proactive_settings(db)
-        fallback = _assistant_settings()["night"]
+        if row["kind"] == "presence":
+            import presence_chat_route
+            try:
+                config = presence_chat_route.resolve(db, row["target_session_id"])
+            except ValueError as error:
+                _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None, status="failed", wanted=False, error=str(error))
+                presence_contact.record(db, "configuration_error", str(error), {"job_id": job_id, "executed": False})
+                db.commit()
+                return
+            fallback = {}
+        else:
+            config = _proactive_settings(db)
+            fallback = _assistant_settings()["night"]
         result = proactive_engine.decide(
             session_id=row["target_session_id"], source=row["kind"],
             provider_id=config.get("provider_id"), model=config.get("model") or "",
@@ -8658,7 +8692,8 @@ def _background_proactive_job(job_id):
             if isinstance(item, dict)
         ]
         now = datetime.now()
-        config = _proactive_settings(db)
+        if row["kind"] != "presence":
+            config = _proactive_settings(db)
         if not _proactive_delivery_enabled(db, row):
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None,
                                 status="cancelled", wanted=False)
