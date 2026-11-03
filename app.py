@@ -63,6 +63,7 @@ import conversation_export  # noqa: E402
 import rikkahub_import  # noqa: E402
 import supabase_sync  # noqa: E402
 import night_engine  # noqa: E402
+import presence_contact
 import proactive_engine  # noqa: E402
 import alarm_engine  # noqa: E402
 import push_service  # noqa: E402
@@ -8319,6 +8320,8 @@ def _restore_proactive_lottery(db, job, now):
 def _ensure_proactive_job(db, now=None, *, plan_date=None):
     now = now or datetime.now()
     config = _proactive_settings(db)
+    if not config.get("enabled"):
+        return presence_contact.pending(db, now)
     if not config.get("enabled") or not config.get("target_session_id"):
         db.execute(
             "UPDATE proactive_message_jobs SET status='cancelled',updated_at=? "
@@ -8330,6 +8333,11 @@ def _ensure_proactive_job(db, now=None, *, plan_date=None):
     existing = db.execute(
         "SELECT * FROM proactive_message_jobs WHERE plan_date=?", (day.isoformat(),)
     ).fetchone()
+    if existing and existing["kind"] == "presence":
+        if not presence_contact.enabled(db):
+            db.execute("UPDATE proactive_message_jobs SET status='cancelled' WHERE id=? AND status IN ('planned','none')", (existing["id"],))
+            return None
+        return existing
     if existing:
         if existing["target_session_id"] != config["target_session_id"] \
                 and existing["status"] not in ("running", "sent"):
@@ -8585,6 +8593,8 @@ def _carry_want_to_tomorrow(db, job, now, reason):
 
 
 def _postpone_proactive(db, job, not_before, now, reason):
+    if job["kind"] == "presence":
+        return presence_contact.postpone(db, job, not_before, now, PROACTIVE_ACTIVE_WINDOW, reason)
     window_end = _proactive_window_end(job)
     if job["kind"] == "silence":
         plan = _proactive_silence_plan(
@@ -8619,6 +8629,10 @@ def _background_proactive_job(job_id):
         row = db.execute("SELECT * FROM proactive_message_jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
             return
+        if not _proactive_delivery_enabled(db, row):
+            _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None, status="cancelled", wanted=False)
+            db.commit()
+            return
         config = _proactive_settings(db)
         fallback = _assistant_settings()["night"]
         result = proactive_engine.decide(
@@ -8645,14 +8659,16 @@ def _background_proactive_job(job_id):
         ]
         now = datetime.now()
         config = _proactive_settings(db)
-        if not config.get("enabled"):
+        if not _proactive_delivery_enabled(db, row):
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None,
                                 status="cancelled", wanted=False)
             db.commit()
             return
         if not result.get("ok"):
+            if row["kind"] == "presence":
+                presence_contact.record(db, "attempt_failed", "主动联系生成失败，按既有限次策略处理", {"job_id": job_id, "executed": False})
             window_end = _proactive_window_end(row)
-            retry_at = now + timedelta(minutes=random.SystemRandom().randrange(15, 31))
+            retry_at = now + timedelta(minutes=15 if row["kind"] == "presence" else random.SystemRandom().randrange(15, 31))
             if row["retry_count"] < 1 and window_end and retry_at <= window_end:
                 db.execute(
                     "UPDATE proactive_message_jobs SET status='planned',planned_at=?,"
@@ -8672,6 +8688,8 @@ def _background_proactive_job(job_id):
             db.commit()
             return
         if result["decision"] == "quiet":
+            if row["kind"] == "presence":
+                presence_contact.record(db, "quiet", "模型选择暂不发送", {"job_id": job_id, "executed": False})
             db.execute(
                 "UPDATE proactive_message_jobs SET status='quiet',decision='quiet',wanted=0,error='',"
                 "updated_at=? WHERE id=?",
@@ -8727,6 +8745,8 @@ def _background_proactive_job(job_id):
             "error='',updated_at=? WHERE id=?",
             (proactive_message_id, now.strftime("%Y-%m-%d %H:%M:%S"), job_id),
         )
+        if row["kind"] == "presence":
+            presence_contact.record(db, "sent", "积温主动消息已保存，进入原有推送流程", {"job_id": job_id, "message_id": proactive_message_id, "executed": True})
         push_event = _create_push_event(
             db, row["target_session_id"], proactive_message_id, "proactive"
         )
@@ -8735,6 +8755,17 @@ def _background_proactive_job(job_id):
             row["target_session_id"], proactive_message_id, result["message"],
             "proactive", push_event["id"],
         )
+
+
+def _presence_nudge_proactive(db, triggers):
+    """Only jiwen contact creates a deterministic opportunity; no lottery."""
+    return presence_contact.queue(db, triggers, _proactive_settings(db), window=PROACTIVE_ACTIVE_WINDOW)
+
+
+def _proactive_delivery_enabled(db, job):
+    if job["kind"] == "presence":
+        return presence_contact.enabled(db)
+    return bool(_proactive_settings(db).get("enabled"))
 
 
 def _proactive_scheduler_tick(now=None):

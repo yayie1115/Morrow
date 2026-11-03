@@ -32,6 +32,7 @@ def _clip(value, limit):
 def event_message(source, now=None):
     now = now or datetime.now()
     source_text = {
+        "presence": "积温状态触发的主动联系",
         "morning": "清晨偶遇",
         "normal": "自然路过",
         "want": "想Morrow",
