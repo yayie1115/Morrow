@@ -37,40 +37,52 @@ def _same_route(primary, fallback):
 
 def _wake_attempt(*, session_id, event, provider_id=None, model="", think=False,
                   format_override="", context_limit=20, image_limit=None,
-                  latest_images_only=False, cache_ttl="off"):
-    reply, reasoning, tool_log, usage = [], [], [], []
+                  latest_images_only=False, cache_ttl="off", protocol=None, volatile_extra="",
+                  max_tool_rounds=None, max_elapsed_seconds=None):
+    reply, reasoning, tool_log, usage, artifact_ids = [], [], [], [], []
     reasoning_started = None;reasoning_ms = None;error = "";meta = {};material = False
-    for kind, payload in chat_engine.stream_chat(
-        session_id, model=model or None, provider_id=provider_id, think=bool(think),
-        context_limit=context_limit, image_limit=image_limit,
-        latest_images_only=bool(latest_images_only), cache_ttl=cache_ttl,
-        ephemeral_user_message=event, stable_extra=PROTOCOL,
-        format_override=format_override,
-    ):
-        if kind == "delta":
-            piece = str(payload or "")
-            if piece.strip(): material = True
-            if reasoning_started is not None and reasoning_ms is None:
-                reasoning_ms = int((time.monotonic() - reasoning_started) * 1000)
-            reply.append(piece)
-        elif kind == "reasoning":
-            if reasoning_started is None: reasoning_started = time.monotonic()
-            reasoning.append(str(payload or ""))
-        elif kind == "tool_result":
-            material = True
-            if not payload.get("hidden"): tool_log.append(payload)
-        elif kind == "usage":
-            usage.append(payload)
-            provider = payload.get("provider") if isinstance(payload, dict) else {}
-            meta = {"model": payload.get("model") or model, "provider_id": (provider or {}).get("id", provider_id),
-                    "provider_name": (provider or {}).get("name", ""), "format": payload.get("format", "")}
-        elif kind == "error":
-            error = str(payload.get("message") if isinstance(payload, dict) else payload or "模型请求失败");break
+    try:
+        for kind, payload in chat_engine.stream_chat(
+            session_id, model=model or None, provider_id=provider_id, think=bool(think),
+            context_limit=context_limit, image_limit=image_limit,
+            latest_images_only=bool(latest_images_only), cache_ttl=cache_ttl,
+            ephemeral_user_message=event, stable_extra=protocol if protocol is not None else PROTOCOL,
+            **({"volatile_extra": volatile_extra} if volatile_extra else {}),
+            **({"max_tool_rounds": max_tool_rounds} if max_tool_rounds is not None else {}),
+            **({"max_elapsed_seconds": max_elapsed_seconds} if max_elapsed_seconds is not None else {}),
+            format_override=format_override,
+        ):
+            if kind == "delta":
+                piece = str(payload or "")
+                if piece.strip(): material = True
+                if reasoning_started is not None and reasoning_ms is None:
+                    reasoning_ms = int((time.monotonic() - reasoning_started) * 1000)
+                reply.append(piece)
+            elif kind == "reasoning":
+                if reasoning_started is None: reasoning_started = time.monotonic()
+                reasoning.append(str(payload or ""))
+            elif kind == "tool_result":
+                aid = payload.get("artifact_id")
+                if type(aid) is int and aid > 0 and aid not in artifact_ids:
+                    artifact_ids.append(aid)
+                material = True
+                if not payload.get("hidden"): tool_log.append(payload)
+            elif kind == "usage":
+                usage.append(payload)
+                provider = payload.get("provider") if isinstance(payload, dict) else {}
+                meta = {"model": payload.get("model") or model, "provider_id": (provider or {}).get("id", provider_id),
+                        "provider_name": (provider or {}).get("name", ""), "format": payload.get("format", "")}
+            elif kind == "error":
+                error = str(payload.get("message") if isinstance(payload, dict) else payload or "模型请求失败");break
+    except Exception as exc:
+        if protocol is None:
+            raise
+        error = "积温唤醒执行中断：" + type(exc).__name__
     text = "".join(reply).strip()
     return {"ok": bool(text) and not error, "message": text, "reasoning": "".join(reasoning),
             "reasoning_ms": reasoning_ms, "tool_log": tool_log, "usage": usage,
             "error": error or ("" if text else "Morrow醒来后没有留下话"),
-            "material": material, **meta}
+            "material": material, "artifact_ids": artifact_ids, **meta}
 
 
 def wake(*, session_id, source_text, note, earliest_at, latest_at,

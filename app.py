@@ -63,6 +63,8 @@ import conversation_export  # noqa: E402
 import rikkahub_import  # noqa: E402
 import supabase_sync  # noqa: E402
 import night_engine  # noqa: E402
+import presence_wake
+import presence_activity
 import presence_contact
 import proactive_engine  # noqa: E402
 import alarm_engine  # noqa: E402
@@ -7737,10 +7739,17 @@ def _background_study_run(run_id):
         ).fetchone()
         if row is None:
             return
+        if row["origin"] == "presence" and not presence_contact.enabled(db):
+            db.execute("UPDATE night_runs SET status='cancelled',resume_state='resolved',completed_at=datetime('now','+8 hours') WHERE id=?", (run_id,))
+            presence_contact.record(db, "activity_cancelled", "积温已关闭，本次活动未开始", {"run_id": run_id, "executed": False})
+            db.commit()
+            return
         db.execute(
             "UPDATE night_runs SET status='running',started_at=datetime('now','+8 hours') "
             "WHERE id=?", (run_id,)
         )
+        if row["origin"] == "presence":
+            presence_activity.started(db, run_id)
         db.commit()
         try:
             prior_attempts = _study_chain_attempts(db, row["chain_id"] or row["id"], run_id)
@@ -7754,7 +7763,7 @@ def _background_study_run(run_id):
                 )
                 db.commit()
 
-            fallback = _assistant_settings()["night"]
+            fallback = {} if row["origin"] == "presence" else _assistant_settings()["night"]
             result = night_engine.perform_activity(
                 session_id=row["session_id"],
                 session_title=row["title"],
@@ -7850,6 +7859,8 @@ def _background_study_run(run_id):
                     "WHERE chain_id=? AND status IN ('planned','running')",
                     (completed_at, chain_id),
                 )
+            if row["origin"] == "presence":
+                presence_activity.finished(db, run_id, result["status"])
             _schedule_recovery_or_finish_job(
                 db, row, succeeded=succeeded, error=result.get("error") or ""
             )
@@ -7882,6 +7893,8 @@ def _background_study_run(run_id):
                 "UPDATE night_runs SET resume_state='pending' WHERE chain_id=?",
                 (row["chain_id"] or run_id,),
             )
+            if row["origin"] == "presence":
+                presence_activity.finished(db, run_id, "failed")
             _schedule_recovery_or_finish_job(db, row, succeeded=False, error=str(exc))
             db.commit()
 
@@ -8669,7 +8682,8 @@ def _background_proactive_job(job_id):
         else:
             config = _proactive_settings(db)
             fallback = _assistant_settings()["night"]
-        result = proactive_engine.decide(
+        decide = presence_wake.wake if row["kind"] == "presence" else proactive_engine.decide
+        result = decide(
             session_id=row["target_session_id"], source=row["kind"],
             provider_id=config.get("provider_id"), model=config.get("model") or "",
             think=config.get("think", False), context_limit=config.get("context_limit"),
@@ -8686,6 +8700,12 @@ def _background_proactive_job(job_id):
         # A proactive attempt can be billable even when Morrow chooses quiet (or
         # the wall-side JSON cannot be parsed). Record every returned usage row
         # first; a spoken result is linked to its message after insertion below.
+        presence_run_id = uuid.uuid4().hex
+        if row["kind"] == "presence":
+            presence_wake.persist(db, row["target_session_id"], result, presence_run_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            if result.get("no_retry"):
+                db.execute("UPDATE proactive_message_jobs SET retry_count=1 WHERE id=?", (job_id,))
+                row = db.execute("SELECT * FROM proactive_message_jobs WHERE id=?", (job_id,)).fetchone()
         proactive_usage_ids = [
             _insert_usage(db, row["target_session_id"], None, item)
             for item in (result.get("usage") or [])
@@ -8754,6 +8774,8 @@ def _background_proactive_job(job_id):
             "provider_name": str(result.get("provider_name") or ""),
             "format": str(result.get("format") or ""),
         }
+        if row["kind"] == "presence":
+            version.update(presence_wake.attach_version(result, presence_run_id))
         cur = db.execute(
             "INSERT INTO messages(session_id,role,content,reasoning,reasoning_ms,"
             "versions,active,proactive,proactive_unread,created_at) "
@@ -8765,6 +8787,13 @@ def _background_proactive_job(job_id):
             ),
         )
         proactive_message_id = cur.lastrowid
+        if row["kind"] == "presence":
+            db.execute("UPDATE tool_calls SET message_id=? WHERE session_id=? AND run_id=?", (proactive_message_id, row["target_session_id"], presence_run_id))
+            db.execute("UPDATE messages SET tool_log=? WHERE id=?", (json.dumps(result.get("tool_log") or [], ensure_ascii=False), proactive_message_id))
+            for aid in result.get("artifact_ids") or []:
+                if type(aid) is int and aid > 0:
+                    db.execute("UPDATE message_artifacts SET message_id=? WHERE id=? AND session_id=? AND message_id IS NULL", (proactive_message_id, aid, row["target_session_id"]))
+
         if proactive_usage_ids:
             placeholders = ",".join("?" for _ in proactive_usage_ids)
             db.execute(
@@ -8792,9 +8821,31 @@ def _background_proactive_job(job_id):
         )
 
 
+def _presence_start_activity(db, triggers):
+    import presence_activity
+    import presence_chat_route
+    config = _proactive_settings(db)
+    def create():
+        route = presence_chat_route.resolve(db, config["target_session_id"])
+        room = dict(_study_settings(db))
+        room["target_session_id"] = config["target_session_id"]
+        room["user_note"] = ""  # Keep the user's pending manual note and stored room configuration intact.
+        room["wake_prompt"] = "积温提示此刻想找点事情做，这不是用户的新要求。沿用操作手册，自行决定真实行动或休息。\n\n" + room["wake_prompt"]
+        return _create_study_run_record(db, room, origin="presence", overrides={**route, "session_id": config["target_session_id"]})
+    run_id = presence_activity.queue(db, triggers, config, create, _alarm_proactive_hold_until)
+    if run_id:
+        threading.Thread(target=_background_study_run, args=(run_id,), daemon=True, name=f"nook-presence-activity-{run_id}").start()
+    return run_id
+
+
 def _presence_nudge_proactive(db, triggers):
     """Only jiwen contact creates a deterministic opportunity; no lottery."""
-    return presence_contact.queue(db, triggers, _proactive_settings(db), window=PROACTIVE_ACTIVE_WINDOW)
+    if any(isinstance(item, dict) and item.get("action") == "contact" for item in triggers or []):
+        job_id = presence_contact.queue(db, triggers, _proactive_settings(db), window=PROACTIVE_ACTIVE_WINDOW)
+        if job_id:
+            return job_id
+        triggers = [item for item in triggers or [] if isinstance(item, dict) and item.get("action") == "find_activity"]
+    return _presence_start_activity(db, triggers)
 
 
 def _proactive_delivery_enabled(db, job):

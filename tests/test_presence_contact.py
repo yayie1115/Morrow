@@ -74,7 +74,7 @@ class PresenceContactTest(unittest.TestCase):
     def test_background_delivery_uses_presence_switch_and_existing_chat_push_path(self):
         kid=self.queue();self.db.execute("UPDATE proactive_message_jobs SET status='running' WHERE id=?",(kid,));self.db.commit()
         result={'ok':True,'decision':'send','message':'Synthetic proactive message','usage':[]}
-        with patch('presence_chat_route.resolve',return_value={'provider_id':7,'model':'synthetic-chat','context_limit':50}),patch('app.proactive_engine.decide',return_value=result) as model,patch('app._background_push_delivery') as push:
+        with patch('presence_chat_route.resolve',return_value={'provider_id':7,'model':'synthetic-chat','context_limit':50}),patch('app.presence_wake.wake',return_value=result) as model,patch('app._background_push_delivery') as push:
             app._background_proactive_job(kid)
             model.assert_called_once();self.assertEqual(model.call_args.kwargs['source'],'presence');self.assertEqual(model.call_args.kwargs['provider_id'],7);self.assertEqual(model.call_args.kwargs['model'],'synthetic-chat');self.assertEqual(model.call_args.kwargs['context_limit'],50);self.assertFalse(model.call_args.kwargs['fallback']['model']);push.assert_called_once()
         row=self.db.execute('SELECT status,message_id FROM proactive_message_jobs WHERE id=?',(kid,)).fetchone()
@@ -83,7 +83,7 @@ class PresenceContactTest(unittest.TestCase):
 
     def test_background_quiet_does_not_create_message_or_push(self):
         kid=self.queue();self.db.execute("UPDATE proactive_message_jobs SET status='running' WHERE id=?",(kid,));self.db.commit()
-        with patch('presence_chat_route.resolve',return_value={'provider_id':7,'model':'synthetic-chat'}),patch('app.proactive_engine.decide',return_value={'ok':True,'decision':'quiet','usage':[]}),patch('app._background_push_delivery') as push:
+        with patch('presence_chat_route.resolve',return_value={'provider_id':7,'model':'synthetic-chat'}),patch('app.presence_wake.wake',return_value={'ok':True,'decision':'quiet','usage':[]}),patch('app._background_push_delivery') as push:
             app._background_proactive_job(kid);push.assert_not_called()
         self.assertEqual(self.db.execute('SELECT status FROM proactive_message_jobs WHERE id=?',(kid,)).fetchone()[0],'quiet')
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM messages WHERE proactive=1').fetchone()[0],0)
