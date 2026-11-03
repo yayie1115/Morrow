@@ -68,6 +68,7 @@ import presence_audit
 import presence_chat
 import presence_activity
 import presence_contact
+import presence_frequency
 import proactive_engine  # noqa: E402
 import alarm_engine  # noqa: E402
 import push_service  # noqa: E402
@@ -8668,6 +8669,12 @@ def _postpone_proactive(db, job, not_before, now, reason):
     return False
 
 
+def _presence_chat_busy(session_id):
+    with _live_replies_lock:
+        live = _live_replies.get(session_id)
+        return bool(live is not None and not live.done and not live.cancelled)
+
+
 def _background_proactive_job(job_id):
     with app.app_context():
         db = get_db()
@@ -8691,6 +8698,12 @@ def _background_proactive_job(job_id):
         else:
             config = _proactive_settings(db)
             fallback = _assistant_settings()["night"]
+        repeated = row["kind"] == "presence" and bool(presence_frequency.policy(db))
+        contact_anchor = presence_frequency.user_anchor(db, row["target_session_id"]) if repeated else None
+        if repeated and (not presence_frequency.claim_current(db, row["target_session_id"], datetime.now()) or _presence_chat_busy(row["target_session_id"])):
+            _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None, status="cancelled", wanted=False)
+            db.commit()
+            return
         decide = presence_wake.wake if row["kind"] == "presence" else proactive_engine.decide
         result = decide(
             session_id=row["target_session_id"], source=row["kind"],
@@ -8723,7 +8736,8 @@ def _background_proactive_job(job_id):
         now = datetime.now()
         if row["kind"] != "presence":
             config = _proactive_settings(db)
-        if not _proactive_delivery_enabled(db, row):
+        if (not _proactive_delivery_enabled(db, row) or
+                (repeated and (contact_anchor != presence_frequency.user_anchor(db, row["target_session_id"]) or _presence_chat_busy(row["target_session_id"])))):
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None,
                                 status="cancelled", wanted=False)
             presence_audit.update(db, result.get("presence_audit_id"), "cancelled")
@@ -8767,7 +8781,7 @@ def _background_proactive_job(job_id):
             "SELECT 1 FROM messages WHERE proactive=1 AND date(created_at)=? LIMIT 1",
             (row["plan_date"],),
         ).fetchone()
-        if already:
+        if already and not repeated:
             presence_audit.update(db, result.get("presence_audit_id"), "skipped")
             _set_proactive_plan(db, job_id, kind=row["kind"], planned_at=None,
                                 status="skipped", wanted=False,
@@ -8879,7 +8893,8 @@ def _proactive_scheduler_tick(now=None):
     planned = datetime.fromisoformat(job["planned_at"])
     if planned > now:
         return None
-    window_end = _proactive_window_end(job)
+    repeated = job["kind"] == "presence" and bool(presence_frequency.policy(db))
+    window_end = None if repeated else _proactive_window_end(job)
     if window_end and now > window_end:
         if job["wanted"]:
             plan = _random_slot(now.date(), (PROACTIVE_ACTIVE_WINDOW,),
@@ -8898,7 +8913,7 @@ def _proactive_scheduler_tick(now=None):
         "SELECT 1 FROM messages WHERE proactive=1 AND date(created_at)=? LIMIT 1",
         (job["plan_date"],),
     ).fetchone()
-    if sent_today:
+    if sent_today and not repeated:
         _set_proactive_plan(db, job["id"], kind=job["kind"], planned_at=None,
                             status="skipped", wanted=bool(job["wanted"]), error="当天已有主动消息")
         db.commit()
@@ -8908,10 +8923,20 @@ def _proactive_scheduler_tick(now=None):
     )
     last_proactive = _latest_message_at(db, "proactive=1")
     eligible = now
-    if last_user:
-        eligible = max(eligible, last_user + timedelta(hours=PROACTIVE_SILENCE_HOURS))
-    if last_proactive:
-        eligible = max(eligible, last_proactive + timedelta(hours=PROACTIVE_COOLDOWN_HOURS))
+    if repeated:
+        due = presence_frequency.next_at(db, job["target_session_id"], now)
+        if due is None:
+            _set_proactive_plan(db, job["id"], kind=job["kind"], planned_at=None, status="cancelled", wanted=False)
+            db.commit()
+            return None
+        eligible = max(eligible, due)
+        if _presence_chat_busy(job["target_session_id"]):
+            eligible = max(eligible, now + timedelta(minutes=5))
+    else:
+        if last_user:
+            eligible = max(eligible, last_user + timedelta(hours=PROACTIVE_SILENCE_HOURS))
+        if last_proactive:
+            eligible = max(eligible, last_proactive + timedelta(hours=PROACTIVE_COOLDOWN_HOURS))
     if eligible > now:
         _postpone_proactive(db, job, eligible, now, "仍在安静间隔里")
         db.commit()
@@ -8933,6 +8958,8 @@ def _proactive_scheduler_tick(now=None):
         "updated_at=? WHERE id=? AND status='planned'",
         (now.strftime("%Y-%m-%d %H:%M:%S"), job["id"]),
     ).rowcount
+    if claimed and repeated:
+        presence_frequency.attempted(db, job, now)
     db.commit()
     if not claimed:
         return None

@@ -2,6 +2,7 @@
 from contextlib import closing
 from pathlib import Path
 import json
+import presence_frequency
 import logging
 import sqlite3
 from datetime import datetime
@@ -15,7 +16,10 @@ def start(database, session_id, purpose, snapshot, hint, protocol, event, run_id
         detail['user_message_id'] = user_message_id
     try:
         with closing(sqlite3.connect(Path(database).resolve().as_uri()+'?mode=rw', uri=True, timeout=2)) as db, db:
-            stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            now = datetime.now()
+            stamp = now.strftime('%Y-%m-%d %H:%M:%S')
+            if presence_frequency.policy(db):
+                detail['period'] = presence_frequency.period(now)
             return db.execute("INSERT INTO presence_events(at,kind,action,reason,detail_json) VALUES (?,'handoff','handoff','积温交接记录',?)",
                               (stamp, json.dumps(detail, ensure_ascii=False))).lastrowid
     except sqlite3.Error:

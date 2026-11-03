@@ -1,5 +1,6 @@
 """Deterministic jiwen contact jobs using the existing delivery ledger."""
 import json
+import presence_frequency
 from datetime import datetime, timedelta
 
 
@@ -18,6 +19,8 @@ def pending(db, now):
     if not enabled(db):
         db.execute("UPDATE proactive_message_jobs SET status='cancelled',updated_at=? WHERE kind='presence' AND status IN ('planned','none')", (stamp,))
         return None
+    if presence_frequency.policy(db):
+        return db.execute("SELECT * FROM proactive_message_jobs WHERE kind='presence' AND status IN ('planned','running') ORDER BY id LIMIT 1").fetchone()
     return db.execute("SELECT * FROM proactive_message_jobs WHERE plan_date=? AND kind='presence'", (now.date().isoformat(),)).fetchone()
 
 
@@ -33,6 +36,8 @@ def record(db, action, reason, detail=None):
 
 def queue(db, triggers, config, now=None, window=(480, 1350)):
     now = now or datetime.now()
+    if presence_frequency.policy(db):
+        return presence_frequency.queue(db, triggers, config, now)
     if not enabled(db) or not any(isinstance(item, dict) and item.get('action') == 'contact' for item in triggers or []):
         return None
     target = config.get('target_session_id')
@@ -65,6 +70,8 @@ def queue(db, triggers, config, now=None, window=(480, 1350)):
 
 
 def postpone(db, job, not_before, now, window=(480,1350), reason='等待发送保护间隔'):
+    if presence_frequency.policy(db):
+        return presence_frequency.postpone(db, job, not_before, now, reason)
     start = now.replace(hour=window[0]//60,minute=window[0]%60,second=0,microsecond=0)
     end = now.replace(hour=window[1]//60,minute=window[1]%60,second=0,microsecond=0)
     when = max(start, not_before)
