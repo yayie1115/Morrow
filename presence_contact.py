@@ -64,19 +64,19 @@ def queue(db, triggers, config, now=None, window=(480, 1350)):
     prior = db.execute('SELECT 1 FROM settings WHERE key=?', (marker,)).fetchone()
     if not prior:
         db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)', (marker,str(job['id'])))
-        record(db,'queued','积温 contact 已进入发送队列',{'job_id':job['id'],'executed':False})
+        record(db,'queued','想开口，排上了',{'job_id':job['id'],'executed':False})
     db.commit()
     return job['id']
 
 
-def postpone(db, job, not_before, now, window=(480,1350), reason='等待发送保护间隔'):
+def postpone(db, job, not_before, now, window=(480,1350), reason='还差一会儿'):
     if presence_frequency.policy(db):
         return presence_frequency.postpone(db, job, not_before, now, reason)
     start = now.replace(hour=window[0]//60,minute=window[0]%60,second=0,microsecond=0)
     end = now.replace(hour=window[1]//60,minute=window[1]%60,second=0,microsecond=0)
     when = max(start, not_before)
     if when >= end:
-        db.execute("UPDATE proactive_message_jobs SET status='skipped',planned_at='',error='保护间隔超过今日允许时段',updated_at=? WHERE id=?", (now.strftime('%Y-%m-%d %H:%M:%S'),job['id']))
+        db.execute("UPDATE proactive_message_jobs SET status='skipped',planned_at='',error='今天没机会了',updated_at=? WHERE id=?", (now.strftime('%Y-%m-%d %H:%M:%S'),job['id']))
         record(db,'skipped','保护间隔超过今日允许时段',{'job_id':job['id'],'executed':False})
         return False
     db.execute("UPDATE proactive_message_jobs SET planned_at=?,updated_at=?,error=? WHERE id=?", (when.strftime('%Y-%m-%d %H:%M:%S'),now.strftime('%Y-%m-%d %H:%M:%S'),reason,job['id']))

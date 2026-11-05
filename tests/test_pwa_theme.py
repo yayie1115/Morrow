@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import re
 import struct
@@ -11,7 +12,7 @@ class PwaThemeTest(unittest.TestCase):
         manifest = json.loads(Path("static/manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["theme_color"], "#edf4ff")
 
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn('<meta name="theme-color" content="#edf4ff" id="themeColor">', page)
         sync = re.search(
             r"function syncSystemBars\(theme\)\{(?P<body>.*?)\n\}",
@@ -25,7 +26,7 @@ class PwaThemeTest(unittest.TestCase):
         self.assertNotIn("pwa-standalone #app::after", page)
 
     def test_service_worker_update_bypasses_stale_shell_cache(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         worker = Path("static/sw.js").read_text(encoding="utf-8")
         self.assertIn("updateViaCache:'none'", page)
         self.assertIn("registration.update()", page)
@@ -38,7 +39,7 @@ class PwaThemeTest(unittest.TestCase):
         manifest = json.loads(Path("static/manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "sakie")
         self.assertEqual(manifest["short_name"], "sakie")
-        self.assertIn("<title>sakie</title>", Path("static/index.html").read_text(encoding="utf-8"))
+        self.assertIn("<title>sakie</title>", frontend_source())
         self.assertEqual(manifest["id"], "/")
         self.assertEqual({item["purpose"] for item in manifest["icons"]}, {"any"})
         for icon in manifest["icons"]:
@@ -50,7 +51,7 @@ class PwaThemeTest(unittest.TestCase):
         for name, size in (("apple-touch-icon.png", 180), ("favicon-32.png", 32), ("badge-96.png", 96)):
             blob = (Path("static/icons") / name).read_bytes()
             self.assertEqual(struct.unpack(">II", blob[16:24]), (size, size))
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn('rel="apple-touch-icon"', page)
         self.assertIn('/static/icons/home-logo.png?v=portrait-1', page)
         worker = Path("static/sw.js").read_text(encoding="utf-8")
@@ -58,7 +59,7 @@ class PwaThemeTest(unittest.TestCase):
         self.assertNotRegex(worker, r"(?m)^\s*icon\s*:")
 
     def test_data_page_only_exposes_github_cloud_backup(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn("GitHub 云端备份", page)
         self.assertNotIn("Supabase 云端镜像", page)
         self.assertNotIn("cloudSyncCard", page)

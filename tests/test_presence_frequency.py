@@ -20,7 +20,7 @@ class FrequencyTest(unittest.TestCase):
         app.DB_PATH=str(Path(self.temp.name)/'nook.db');app.DATA_DIR=self.temp.name;app.UPLOAD_DIR=str(Path(self.temp.name)/'uploads')
         app.init_db()
         self.db=sqlite3.connect(app.DB_PATH);self.db.row_factory=sqlite3.Row
-        self.db.execute('CREATE TABLE presence_events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS presence_events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT)')
         self.sid=self.db.execute("INSERT INTO sessions(title) VALUES ('Synthetic contact')").lastrowid
         self.config={'enabled':False,'target_session_id':self.sid}
         for key,value in [('presence_engine',{'enabled':True}),('proactive_messages',self.config),(frequency.KEY,frequency.DEFAULT)]:

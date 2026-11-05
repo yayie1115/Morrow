@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -217,7 +218,7 @@ class KeepsakeApiTest(unittest.TestCase):
 
     def test_frontend_exposes_selection_photo_wall_and_separate_detail(self):
         with open(os.path.join(os.getcwd(), "static", "index.html"), encoding="utf-8") as source:
-            html = source.read()
+            html = expand_frontend(source.read())
         for marker in (
             'id="keepsakeSelectBar"', 'id="keepsakeCompose"',
             'data-mode="keepsake"', 'data-mode="voice"', 'className="keepsake-photo"',

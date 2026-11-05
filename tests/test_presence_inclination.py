@@ -13,11 +13,11 @@ import test_presence_frequency as frequency_tests
 class InclinationTest(unittest.TestCase):
     def setUp(self):
         self.db=sqlite3.connect(':memory:')
-        self.db.executescript('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE presence_state(id INTEGER,state_json TEXT,last_tick_at TEXT,last_error TEXT);')
+        self.db.executescript('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS presence_state(id INTEGER,state_json TEXT,last_tick_at TEXT,last_error TEXT);')
         self.now=datetime(2026,1,1,14)
         self.db.execute('INSERT INTO settings VALUES (?,?)',(frequency.KEY,json.dumps(frequency.DEFAULT)))
         self.db.execute("INSERT INTO settings VALUES ('presence_engine',?)",(json.dumps({'enabled':True}),))
-        self.db.execute("INSERT INTO presence_state VALUES(1,'{}',?,'')",(str(self.now),))
+        self.db.execute("INSERT OR REPLACE INTO presence_state(id,state_json,last_tick_at,last_error) VALUES(1,'{}',?,'')",(str(self.now),))
         self.state()
 
     def tearDown(self):self.db.close()
@@ -68,8 +68,8 @@ class InclinationQueueTest(unittest.TestCase):
     queue=frequency_tests.FrequencyTest.queue
 
     def test_augmented_signal_uses_same_day_night_timer_and_records_basis(self):
-        self.db.execute('CREATE TABLE presence_state(id INTEGER,state_json TEXT,last_tick_at TEXT,last_error TEXT)')
-        self.db.execute('INSERT INTO presence_state VALUES (1,?,?,?)',(json.dumps({'connection':.2,'lust':1.,'valence':0,'pride':0}),str(self.now),''));self.db.commit()
+        self.db.execute('CREATE TABLE IF NOT EXISTS presence_state(id INTEGER,state_json TEXT,last_tick_at TEXT,last_error TEXT)')
+        self.db.execute('INSERT OR REPLACE INTO presence_state(id,state_json,last_tick_at,last_error) VALUES (1,?,?,?)',(json.dumps({'connection':.2,'lust':1.,'valence':0,'pride':0}),str(self.now),''));self.db.commit()
         signals=inclination.augment(self.db,[{'action':'intimate_check'}],now=self.now)
         self.assertEqual(signals[-1]['action'],'contact')
         before=frequency.next_at(self.db,self.sid,self.now)

@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -147,7 +148,7 @@ class MomentsApiTest(unittest.TestCase):
 
     def test_moments_is_a_drawer_with_horizontal_dates_and_exact_jump(self):
         response = self.client.get("/")
-        page = response.get_data(as_text=True)
+        page = expand_frontend(response.get_data(as_text=True))
         response.close()
         self.assertIn('class="drawer moments-drawer" id="momentsDrawer"', page)
         self.assertIn('class="moments-days" id="momentsDays"', page)

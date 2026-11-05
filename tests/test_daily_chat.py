@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import unittest
 from pathlib import Path
 
@@ -5,7 +6,7 @@ from pathlib import Path
 class DailyChatStyleContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = Path("static/index.html").read_text(encoding="utf-8")
+        cls.page = frontend_source()
 
     def test_single_preference_controls_the_complete_daily_style(self):
         daily = self.page.index('id="tgDailyChat"')

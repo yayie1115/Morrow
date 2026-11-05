@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -293,7 +294,7 @@ class VoiceLetterTest(unittest.TestCase):
         saved = self.client.put("/api/chat/tool-visibility", json={"capability": "voice_letter", "visible": True})
         self.assertTrue(saved.get_json()["visible"])
         response = self.client.get("/")
-        page = response.get_data(as_text=True)
+        page = expand_frontend(response.get_data(as_text=True))
         response.close()
         for marker in ("语音", 'id="voiceViewer"', 'id="tidyArtifactList"', "/api/artifacts",
                        "openVoiceEnvelope", "voice-detail-next", "voice-stack-stage", "defaultVoiceDrawerGroupKey",

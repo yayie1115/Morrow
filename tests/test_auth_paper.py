@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import re
 import unittest
 from html.parser import HTMLParser
@@ -32,7 +33,7 @@ class SceneParser(HTMLParser):
 class AuthPaperTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = Path('static/index.html').read_text(encoding='utf-8')
+        cls.page = frontend_source()
         cls.scenes = cls.page.split('  <div id="bootScreen"', 1)[1].split('  <div id="app">', 1)[0]
         cls.parser = SceneParser()
         cls.parser.feed('<div id="bootScreen"' + cls.scenes)

@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import os
 import shutil
 import sqlite3
@@ -187,7 +188,7 @@ class DiaryApiTest(unittest.TestCase):
         self.assertEqual(anonymous.get("/api/diary").status_code, 401)
 
     def test_assistant_entries_and_comments_reuse_the_same_maintenance_ui(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn('<div class="diary-paper-comment editable"', page)
         self.assertIn('bindDiaryEntryLongPress(paper.querySelector(".diary-paper-content"),entry);', page)
         self.assertNotIn('if(entry.author==="user")bindDiaryEntryLongPress', page)

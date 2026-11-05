@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Renaming a display label must not rewrite stored diary tags or defaults."""
 from pathlib import Path
 import shutil
@@ -7,7 +8,7 @@ import unittest
 
 class DiaryTagLabelTest(unittest.TestCase):
     def test_filter_and_compose_labels_keep_original_values(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         self.assertIn('<button data-tag="dive"><i class="tag-dive"></i>thoughts</button>', source)
         self.assertIn('<button class="tag-dive" data-tag="dive">thoughts</button>', source)
         self.assertNotIn('>deep</button>', source)
@@ -15,7 +16,7 @@ class DiaryTagLabelTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_old_stored_tags_render_new_label(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         start = source.index('const DIARY_TAGS=')
         mapping = source[start:source.index('\n', start)]
         start = source.index('function diaryTagMarkup(')

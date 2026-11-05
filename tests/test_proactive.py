@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -413,7 +414,7 @@ class ProactiveApiTest(unittest.TestCase):
 
     def test_frontend_contract(self):
         with open(os.path.join(os.getcwd(), "static", "index.html"), encoding="utf-8") as source:
-            html = source.read()
+            html = expand_frontend(source.read())
         for element_id in (
             "proactiveCard", "proactiveOpen", "proactiveToggle", "proactivePanel",
             "proactiveTargets", "proactiveState", "wantAssistant", "proactiveSave", "chatBadge",

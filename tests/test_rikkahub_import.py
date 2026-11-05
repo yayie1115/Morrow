@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import base64
 import io
 import json
@@ -173,7 +174,7 @@ class RikkaHubImportApiTest(unittest.TestCase):
 class RikkaHubFrontendContractTest(unittest.TestCase):
     def test_import_entry_preview_and_api_wiring_exist(self):
         with open(os.path.join("static", "index.html"), encoding="utf-8") as handle:
-            html = handle.read()
+            html = expand_frontend(handle.read())
         for expected in (
             'id="rikkahubImportBtn"',
             'id="rikkahubImportFile"',

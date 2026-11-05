@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Offline tests for themed We controls and calendar boundaries."""
 from pathlib import Path
 import shutil
@@ -7,7 +8,7 @@ import unittest
 
 class WePickerTest(unittest.TestCase):
     def test_no_browser_pronoun_or_date_popups(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         self.assertIn('<input type="hidden" id="weAssistantPronoun"', source)
         self.assertIn('<input type="hidden" id="togetherDate">', source)
         self.assertIn('<div class="we-calendar-panel" id="weDatePanel" hidden>', source)
@@ -22,7 +23,7 @@ class WePickerTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_shared_sheet_content_survives_model_and_calendar_switches(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         code = source[source.index('const sheet=$("#sheet")'):source.index('sheetMask.onclick=closeSheet;')]
         script = """
 const assert=require('node:assert/strict'),reducedMotion=true;
@@ -56,7 +57,7 @@ assert.equal(sheetBody.children.some(child=>child.className==='sheet-choice-list
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_calendar_and_picker_interaction(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         code = source[source.index('let weCalendarYear='):source.index('function tickClock()')]
         script = """
 const assert=require('node:assert/strict');

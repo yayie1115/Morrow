@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Diary comment names share the other comment surfaces' identity rules."""
 from pathlib import Path
 import shutil
@@ -7,14 +8,14 @@ import unittest
 
 class DiaryIdentityTest(unittest.TestCase):
     def test_both_comment_surfaces_support_live_identity_updates(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         self.assertIn('<span class="who" data-identity-comment-author=', source)
         self.assertIn('<div class="diary-paper-comment-head"><strong data-identity-comment-author=', source)
         self.assertGreaterEqual(source.count('escHtml(DIARY_COMMENT_EMOJIS[comment.author]||"·")'), 4)
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_defaults_partial_names_and_explicit_brand_name(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         identity = source[source.index('let IDENTITY='):source.index('async function loadIdentity()')]
         start = source.index('const DIARY_COMMENT_EMOJIS=')
         getters = source[start:source.index('\n', start)]

@@ -60,12 +60,12 @@ def set_alarm(args, session_id):
         earliest = datetime.strptime(str(args.get("earliest_at") or "").strip(), "%Y-%m-%d %H:%M:%S")
         latest = datetime.strptime(str(args.get("latest_at") or "").strip(), "%Y-%m-%d %H:%M:%S")
     except ValueError:
-        return "（Morrow闹钟：时间需要写成 YYYY-MM-DD HH:MM:SS。）"
+        return "（%s闹钟：时间需要写成 YYYY-MM-DD HH:MM:SS。）" % _brand_name()
     now = datetime.utcnow() + timedelta(hours=8)
     if latest < earliest:
-        return "（Morrow闹钟：最晚有效时间不能早于最早叫醒时间。）"
+        return "（%s闹钟：最晚有效时间不能早于最早叫醒时间。）" % _brand_name()
     if latest <= now:
-        return "（Morrow闹钟：这张纸条的有效时间已经过去了。）"
+        return "（%s闹钟：这张纸条的有效时间已经过去了。）" % _brand_name()
     note = str(args.get("note") or "").strip()[:1000]
     conn = _connect()
     try:
@@ -75,7 +75,7 @@ def set_alarm(args, session_id):
         saved = {}
     if not saved.get("enabled") or int(saved.get("target_session_id") or 0) != int(session_id or 0):
         conn.close()
-        return "（Morrow闹钟现在没有为这段对话打开。）"
+        return "（%s闹钟现在没有为这段对话打开。）" % _brand_name()
     source = conn.execute(
         "SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1",
         (session_id,),
@@ -2108,7 +2108,7 @@ def _mcp_servers():
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT id,name,url,narrate,access_token,tools FROM mcp_servers "
+            "SELECT id,name,url,narrate,catalog_hint,access_token,tools FROM mcp_servers "
             "WHERE enabled=1 ORDER BY sort_order,id"
         ).fetchall()
     except sqlite3.OperationalError:
@@ -2122,6 +2122,7 @@ def _mcp_servers():
         out.append({
             "id": row["id"], "name": row["name"], "url": row["url"],
             "narrate": row["narrate"] or "", "access_token": row["access_token"] or "",
+            "catalog_hint": (row["catalog_hint"] if "catalog_hint" in row.keys() else "") or "",
             "tools": server_tools,
         })
     conn.close();return out
@@ -2459,10 +2460,178 @@ def enabled_tool_names(config=None):
     return names
 
 
+TOOL_USAGE_KEY = "tool_usage_rank_v1"
+
+
+def _usage_counts():
+    """近 30 天每个工具的调用次数；按天缓存，保证一天内目录文字稳定（prompt 缓存才不会被打破）。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    raw = _setting(TOOL_USAGE_KEY, "")
+    if raw:
+        try:
+            saved = json.loads(raw)
+            if saved.get("date") == today and isinstance(saved.get("counts"), dict):
+                return saved["counts"]
+        except (TypeError, ValueError):
+            pass
+    counts = {}
+    try:
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT tool, COUNT(*) FROM tool_calls WHERE created_at >= datetime('now','-30 days') "
+            "GROUP BY tool"
+        ).fetchall()
+        conn.close()
+        counts = {str(row[0]): int(row[1]) for row in rows if row and row[0]}
+    except sqlite3.Error:
+        return {}
+    try:
+        conn = _connect()
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (TOOL_USAGE_KEY, json.dumps({"date": today, "counts": counts}, ensure_ascii=False)),
+        )
+        conn.commit()
+        conn.close()
+    except sqlite3.Error:
+        pass
+    return counts
+
+
+DEFAULT_SERVER_HINTS = {
+    "Serein": "记忆、日记、偏好",
+    "花园": "发帖、对局、通知",
+    "Tavily": "联网搜索与抓取",
+    "VPS 管理": "服务器命令",
+    "涩涩大富翁": "大富翁对局",
+}
+
+
+def _server_hint(group):
+    """每个 MCP 服务器在目录里的一句话说明：优先用设置里的描述，否则自动生成。"""
+    label = group.get("label") or ""
+    for server in _mcp_servers():
+        if ("MCP · " + (server.get("name") or "")) == label:
+            hint = (server.get("catalog_hint") or "").strip()
+            if hint:
+                return hint
+    short = label.replace("MCP · ", "")
+    if DEFAULT_SERVER_HINTS.get(short):
+        return DEFAULT_SERVER_HINTS[short]
+    names = [str(name) for name in (group.get("names") or [])]
+    cleaned = []
+    for name in names[:4]:
+        probe = _mcp_function_by_name(name) or {}
+        desc = str(probe.get("description") or "").strip()
+        cleaned.append(_index_hint(desc, 12) if desc else name)
+    return "／".join(part for part in cleaned if part) or "外部能力"
+
+
 def tool_index_text(config=None):
+    """目录：内置工具一行一条；MCP 按服务器分组，常用的带描述，冷门的只留名字。
+
+    冷门工具仍然全部列出来（随时可直接调，参数用 tool_show 展开），
+    只是不占描述的位置；顺序按近 30 天调用频率，且一天内保持稳定。
+    """
     config = config or load_tool_index()
-    lines = ["%s — %s" % (name, _index_hint(_tool_description(name)))
-             for name in enabled_tool_names(config)]
+    names = enabled_tool_names(config)
+    counts = _usage_counts()
+    builtin = [name for name in names if not name.startswith("mcp_")]
+    builtin.sort(key=lambda name: (-counts.get(name, 0), name))
+    lines = ["%s — %s" % (name, _index_hint(_tool_description(name))) for name in builtin]
+
+    listed = set(names)
+    hints = {group["label"]: _server_hint(group) for group in _mcp_groups()}
+    for group in _mcp_groups():
+        members = [name for name in group["names"] if name in listed]
+        if not members:
+            continue
+        members.sort(key=lambda name: (-counts.get(name, 0), name))
+        hot = [name for name in members if counts.get(name, 0) > 0][:3]
+        lines.append('%s — %s（%d 个工具；全部用 tool_show(server="%s") 展开）'
+                     % (group["label"], hints.get(group["label"]) or "外部能力",
+                        len(members), group["label"].replace("MCP · ", "")))
+        if hot:
+            lines.append("  常用：" + "、".join(hot))
+    return _apply_brand("\n".join(lines))
+
+
+_FIND_SYNONYMS = {
+    "游戏": ("game", "play", "花园"),
+    "花园": ("game", "galatea"),
+    "搜索": ("search", "tavily"),
+    "搜": ("search", "tavily"),
+    "记忆": ("memory", "recall", "serein"),
+    "日记": ("diary", "kept", "memory"),
+    "服务器": ("vps", "server", "command"),
+    "音乐": ("music", "song"),
+    "歌词": ("lyrics", "music"),
+    "天气": ("weather",),
+    "照片": ("image", "photo", "keepsake"),
+    "留影": ("keepsake", "photo"),
+    "图": ("image", "photo", "keepsake"),
+}
+
+
+def tool_find(keyword, limit=10):
+    """按关键词在全部工具里搜索（包括没写进目录的冷门工具）。
+
+    中文关键词会先扩展成同义词（如「游戏」→ game / 花园），也会匹配 MCP 服务器名；
+    命中服务器时把该组工具整行列出来，不用先知道英文工具名。
+    """
+    query = str(keyword or "").strip().lower()
+    if not query:
+        return "（需要提供关键词）"
+    terms = [query]
+    for cn, syns in _FIND_SYNONYMS.items():
+        if cn in query or query in cn:
+            terms.extend(syns)
+    terms = tuple(dict.fromkeys(terms))
+
+    def hit(*texts):
+        return any(term in str(text).lower() for text in texts for term in terms)
+
+    hits = []
+    for name, entry in _REGISTRY.items():
+        if name in TOOL_INDEX_META:
+            continue
+        desc = (entry[2] or {}).get("description") or ""
+        if hit(name, desc):
+            hits.append((name, _index_hint(desc, 60)))
+
+    by_name = {}
+    for item in _openai_mcp_tools():
+        function = item["function"]
+        by_name[str(function.get("name") or "")] = function
+    for group in _mcp_groups():
+        members = [name for name in group["names"] if name in by_name]
+        if not members:
+            continue
+        label = str(group.get("label") or "")
+        server_hit = hit(label)
+        matched = [name for name in members
+                   if hit(name, by_name[name].get("description") or "")]
+        if not server_hit and not matched:
+            continue
+        if server_hit:
+            hits.append(("_group", "%s（%d 个）" % (label, len(members))))
+            for name in members[:12]:
+                hits.append((name, _index_hint(by_name[name].get("description") or "", 50)))
+        else:
+            for name in matched:
+                hits.append((name, _index_hint(by_name[name].get("description") or "", 50)))
+
+    if not hits:
+        return "（没有找到和「%s」相关的工具，换个说法再试）" % keyword
+    try:
+        limit = max(1, min(int(limit), 20))
+    except (TypeError, ValueError):
+        limit = 10
+    total = len([item for item in hits if item[0] != "_group"])
+    lines = ["找到 %d 个：" % total]
+    for name, hint in hits[:limit]:
+        lines.append(("◆ %s" % hint) if name == "_group" else ("- %s — %s" % (name, hint)))
     return "\n".join(lines)
 
 
@@ -2490,7 +2659,7 @@ def tool_catalog(config=None):
         if name in TOOL_INDEX_META:
             continue
         group = _group_of(name)
-        items.append({"name": name, "hint": _index_hint(_tool_description(name)),
+        items.append({"name": name, "hint": _apply_brand(_index_hint(_tool_description(name))),
                       "kind": "builtin", "enabled": name not in denied,
                       "group": {"key": "builtin:%s" % group, "kind": "builtin",
                                 "label": group}})
@@ -2570,6 +2739,20 @@ def openai_index_tools():
                 "required": ["name", "arguments"],
             },
         },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "tool_find",
+            "description": "按关键词在全部工具里搜（含目录里只留名字的冷门工具）。不确定用哪个工具时先用它。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "关键词，如 游戏 / 天气 / 日记"},
+                    "limit": {"type": "integer", "description": "最多几条，默认 10"},
+                },
+                "required": ["keyword"],
+            },
+        },
     }]
 
 
@@ -2593,9 +2776,23 @@ def chat_tool_index_block(config=None):
 
 
 def tool_show(args, session_id=None):
-    name = str((args or {}).get("name") or "").strip()
+    args = args or {}
+    server_label = str(args.get("server") or "").strip()
+    if server_label:
+        for group in _mcp_groups():
+            label = group.get("label") or ""
+            if server_label not in label:
+                continue
+            lines = []
+            for name in group["names"]:
+                function = _mcp_function_by_name(name) or {}
+                desc = _index_hint(function.get("description") or "", 40)
+                lines.append("- %s — %s" % (name, desc or "（无说明）"))
+            return "\n".join(lines) or "（这个服务器没有可用工具）"
+        return "（没有名为 %s 的服务器）" % server_label
+    name = str(args.get("name") or "").strip()
     if not name:
-        return "（需要提供工具名）"
+        return "（需要提供工具名，或者用 server=\"服务器名\" 展开整组）"
     entry = _REGISTRY.get(name)
     if entry and name not in TOOL_INDEX_META:
         spec = entry[2] or {}
@@ -2634,6 +2831,13 @@ _REGISTRY["tool_show"] = (tool_show, "Morrow 正在翻工具说明", {
     "parameters": {"type": "object",
                    "properties": {"name": {"type": "string", "description": "工具名"}},
                    "required": ["name"]},
+})
+_REGISTRY["tool_find"] = (tool_find, "Morrow 正在翻工具目录", {
+    "description": "按关键词在全部工具里搜索，包括没写进目录的冷门工具。不确定该用哪个工具时先用它。",
+    "parameters": {"type": "object",
+                   "properties": {"keyword": {"type": "string", "description": "关键词，如 天气 / 游戏 / 日记"},
+                                  "limit": {"type": "integer", "description": "最多返回几条，默认 10"}},
+                   "required": ["keyword"]},
 })
 _REGISTRY["tool_call"] = (tool_call, "Morrow 正在调用工具", {
     "description": "按名字执行工具。arguments 必须符合该工具的 schema。",

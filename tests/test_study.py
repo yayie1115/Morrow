@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import io
 import json
 import os
@@ -706,7 +707,7 @@ class StudyApiTest(unittest.TestCase):
 
     def test_frontend_has_manual_study_room_contract(self):
         with open(os.path.join(os.getcwd(), "static", "index.html"), encoding="utf-8") as source:
-            html = source.read()
+            html = expand_frontend(source.read())
         for element_id in (
             "studyAddBtn", "studyWake", "studySessionTargets", "studyPromptBtn",
             "studyRunBtn", "studyPromptDialog", "studyHandbookDialog", "studyUserNote",

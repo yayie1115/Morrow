@@ -56,7 +56,7 @@ def attempted(db, job, now):
              'user_anchor': user_anchor(db, job['target_session_id'])}
     db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)',
                ('presence_contact_attempt:'+str(job['target_session_id']), json.dumps(value)))
-    record(db, 'frequency_attempt', ('夜间' if period(now)=='night' else '白天')+'积温唤醒开始；本轮结束后按间隔等待下一次', value)
+    record(db, 'frequency_attempt', ('夜间' if period(now)=='night' else '白天')+'这一轮开始，结束后等下一次', value)
 
 
 def claim_current(db, sid, now):
@@ -100,7 +100,7 @@ def queue(db, triggers, config, now):
         db.execute("UPDATE proactive_message_jobs SET target_session_id=?,kind='presence',status='planned',planned_at=?,wanted=0,regular_selected=0,morning_selected=0,attempt_count=0,retry_count=1,message_id=NULL,decision='',error='',updated_at=? WHERE id=?",
                    (sid,stamp,stamp,job['id']))
         basis = next((t.get('contact_basis') for t in triggers if isinstance(t, dict) and t.get('action')=='contact' and t.get('contact_basis')), None)
-        reason = ('夜间' if period(now)=='night' else '白天')+'积温联系已排队'
+        reason = ('夜间' if period(now)=='night' else '白天')+'已经在等了'
         detail = {'job_id':job['id'],'period':period(now),'eligible_at':due.strftime('%Y-%m-%d %H:%M:%S'),'executed':False}
         if basis:
             detail['contact_basis'] = basis

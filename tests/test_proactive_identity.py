@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Proactive longing label uses the AI pronoun, not its display name."""
 from pathlib import Path
 import shutil
@@ -7,7 +8,7 @@ import unittest
 
 class ProactiveIdentityTest(unittest.TestCase):
     def test_initial_markup_and_identity_refresh(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         self.assertIn('id="wantAssistant" type="button" aria-pressed="false">想他</button>', source)
         self.assertNotIn('"想Morrow"', source)
         identity = source[source.index('function renderIdentity()'):source.index('async function loadIdentity()')]
@@ -15,13 +16,13 @@ class ProactiveIdentityTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_all_pronouns_and_pending_and_disabled_states(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         identity = source[source.index('let IDENTITY='):source.index('async function loadIdentity()')]
         summary = source[source.index('function renderProactiveSummary()'):source.index('$("#proactiveContext").onclick')]
         script = """
 const assert=require('node:assert/strict'),nodes=new Map();
 const $=key=>{if(!nodes.has(key))nodes.set(key,{classList:{toggle(){}},setAttribute(name,value){this[name]=value;}});return nodes.get(key);};
-const $$=()=>[],proactiveJobLabel=()=> 'synthetic';
+const $$=()=>[],proactiveJobLabel=()=> 'synthetic',fillModelPicker=()=>{};
 let PROACTIVE_STATE={enabled:true,job:{wanted:false},unread_count:0};
 """+identity+summary+"""
 IDENTITY.assistant_name='A fictional name';

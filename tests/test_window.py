@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import os
 import json
 import shutil
@@ -197,7 +198,7 @@ class ChatWindowTest(unittest.TestCase):
 
     def test_frontend_places_window_entry_between_compression_and_background(self):
         with open(os.path.join(os.getcwd(), "static", "index.html"), encoding="utf-8") as source:
-            html = source.read()
+            html = expand_frontend(source.read())
         self.assertLess(html.index('id="compressHistoryBtn"'), html.index('id="moveWindowBtn"'))
         self.assertLess(html.index('id="moveWindowBtn"'), html.index('id="chatBgText"'))
         for marker in ('id="windowCard"', 'id="windowRecent"', 'id="windowModes"',

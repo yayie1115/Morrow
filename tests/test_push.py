@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -265,7 +266,7 @@ class PushTest(unittest.TestCase):
         self.assertEqual(sent[0]["body"], "后台消息通知已经接通啦")
 
     def test_frontend_and_worker_contract(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         worker = Path("static/sw.js").read_text(encoding="utf-8")
         manifest = json.loads(Path("static/manifest.json").read_text(encoding="utf-8"))
         self.assertIn('id="tgPush"', page)

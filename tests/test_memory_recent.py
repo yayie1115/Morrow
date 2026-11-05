@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -82,7 +83,7 @@ class MemoryRecentTest(unittest.TestCase):
         conn.close()
 
     def test_memory_page_keeps_dialog_logic_and_uses_capsule_navigation(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn('id="memPersonaPanel" hidden', page)
         self.assertIn('id="memRecentList"', page)
         self.assertIn('data-kind="fixed" class="on">Forever</button>', page)

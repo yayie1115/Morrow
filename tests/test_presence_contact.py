@@ -15,7 +15,7 @@ class PresenceContactTest(unittest.TestCase):
         self.old=(app.DB_PATH,app.DATA_DIR,app.UPLOAD_DIR)
         app.DB_PATH=str(self.root/'nook.db');app.DATA_DIR=str(self.root);app.UPLOAD_DIR=str(self.root/'uploads');app.init_db()
         self.db=sqlite3.connect(app.DB_PATH);self.db.row_factory=sqlite3.Row
-        self.db.execute("CREATE TABLE presence_events(id INTEGER PRIMARY KEY,at TEXT NOT NULL,kind TEXT,action TEXT,reason TEXT,detail_json TEXT)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS presence_events(id INTEGER PRIMARY KEY,at TEXT NOT NULL,kind TEXT,action TEXT,reason TEXT,detail_json TEXT)")
         self.sid=self.db.execute("INSERT INTO sessions(title) VALUES ('Synthetic contact')").lastrowid
         for key,value in [('presence_engine',{'enabled':True}),('proactive_messages',{'enabled':False,'target_session_id':self.sid})]:
             self.db.execute('INSERT OR REPLACE INTO settings VALUES (?,?)',(key,json.dumps(value)))

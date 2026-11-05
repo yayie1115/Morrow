@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import shutil
 import subprocess
@@ -9,7 +10,7 @@ class ChatStabilityTest(unittest.TestCase):
     def test_stream_respects_reader_position_and_coalesces_updates(self):
         if not shutil.which("node"):
             self.skipTest("Node.js unavailable")
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         start = page.index("let _bodyRAF=0")
         end = page.index("const PHOTO_CARD_W", start)
         code = page[start:end]
@@ -35,7 +36,7 @@ assert.equal(renders,2);
         subprocess.run(["node", "-e", harness + code + checks], check=True)
 
     def test_typing_and_reply_completion_do_not_force_focus_or_scroll(self):
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         focus=page.split('input.addEventListener("focus",',1)[1].split('input.addEventListener("blur",',1)[0]
         self.assertNotIn("scrollDown",focus)
         send=page.split("async function send(){",1)[1].split("async function regenerate",1)[0]
@@ -44,7 +45,7 @@ assert.equal(renders,2);
         self.assertIn('log.scrollTop+=anchor.getBoundingClientRect().top-top',page)
 
     def test_mobile_editors_prevent_focus_zoom_and_use_fixed_viewport(self):
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         self.assertIn('textarea,select,[contenteditable="true"]{font-size:max(16px,1em)!important;}',page)
         self.assertIn('font-size:max(16px,var(--chat-fs,16px))!important;',page)
         viewport=page.split('name="viewport"',1)[1].split('>',1)[0]
@@ -55,7 +56,7 @@ assert.equal(renders,2);
     def test_initial_chat_warmup_deduplicates_requests(self):
         if not shutil.which("node"):
             self.skipTest("Node.js unavailable")
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         code=page.split("let initialSessionList=null",1)[1].split("const EMPTY_LINES",1)[0]
         code="let initialSessionList=null"+code
         harness=r"""
@@ -78,7 +79,7 @@ const loadMessages=async()=>{loads++;};const showEmpty=()=>{};
         subprocess.run(["node","-e",harness+code+checks],check=True)
 
     def test_home_data_does_not_block_app_reveal(self):
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         enter=page.split("async function enterApp(",1)[1].split("async function checkAuth",1)[0]
         self.assertNotIn("settleCore(homeReady)",enter)
         self.assertIn("warmInitialChat()",enter)
@@ -86,7 +87,7 @@ const loadMessages=async()=>{loads++;};const showEmpty=()=>{};
     def test_stream_failure_preserves_received_text_without_faking_saved_version(self):
         if not shutil.which("node"):
             self.skipTest("Node.js unavailable")
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         code="const rollbackFailedAI=()=>{"+page.split("const rollbackFailedAI=()=>{",1)[1].split('  const rb=aiEl.querySelector',1)[0]
         harness=r"""
 const assert=require('node:assert/strict');let failed=true,savedState=null,opts={},removed=false,extra=[];
@@ -106,7 +107,7 @@ assert.equal(extra[0]._deliveryUnconfirmed,true);
         subprocess.run(["node","-e",harness+code+checks],check=True)
 
     def test_chat_receipts_are_collapsed_and_loaded_only_on_open(self):
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         ensure=page.split("function ensureChatReceipt(",1)[1].split("function addChatErrorReceipt",1)[0]
         self.assertIn('document.createElement("details")',ensure)
         self.assertNotIn(".open=true",ensure)
@@ -118,7 +119,7 @@ assert.equal(extra[0]._deliveryUnconfirmed,true);
     def test_vps_bubble_metadata_uses_real_saved_summary(self):
         if not shutil.which("node"):
             self.skipTest("Node.js unavailable")
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         clock="function chatTimestamp(value)"+page.split("function chatTimestamp(value)",1)[1].split("const CHAT_PAUSE_MS",1)[0]
         meta="function aiMetaText(wrap)"+page.split("function aiMetaText(wrap)",1)[1].split("function renderUserBody",1)[0]
         harness="const MONTH_ABBR=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];const fmtTok=n=>String(n);"
@@ -133,7 +134,7 @@ wrap._models=['已编辑'];assert.match(aiMetaText(wrap),/已编辑/);
     def test_attachment_upload_is_deduplicated_bounded_and_ordered(self):
         if not shutil.which("node"):
             self.skipTest("Node.js unavailable")
-        page=Path("static/index.html").read_text(encoding="utf-8")
+        page=frontend_source()
         code="const attachmentUploadQueue=[]"+page.split("const attachmentUploadQueue=[]",1)[1].split("async function uploadAttachmentFile",1)[0]
         harness=r"""
 const assert=require('node:assert/strict');let calls=0,active=0,maximum=0;

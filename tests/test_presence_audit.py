@@ -15,7 +15,7 @@ class AuditTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.path = str(Path(self.temp.name) / 'nook.db')
         with closing(sqlite3.connect(self.path)) as db, db:
-            db.executescript("CREATE TABLE presence_events(id INTEGER PRIMARY KEY, at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT);")
+            db.executescript("CREATE TABLE IF NOT EXISTS presence_events(id INTEGER PRIMARY KEY, at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT);")
 
     def tearDown(self):
         self.temp.cleanup()

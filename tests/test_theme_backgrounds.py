@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Offline checks for theme wallpaper defaults and upload precedence."""
 from pathlib import Path
 import shutil
@@ -14,7 +15,7 @@ class ThemeBackgroundTest(unittest.TestCase):
             width, height = struct.unpack('>II', data[16:24])
             self.assertGreaterEqual(width, 1024)
             self.assertGreater(height, width)
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         self.assertIn('filter:var(--app-bg-filter,none)', source)
         self.assertIn('filter:var(--chat-bg-filter,none)', source)
         prefs = source[source.index('function applyPrefs()'):source.index('function syncPrefUI()')]
@@ -23,7 +24,7 @@ class ThemeBackgroundTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_switch_night_mode_uploads_and_restore(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         helpers = source[source.index('const THEME_BACKGROUNDS='):source.index('function syncSystemBars(')]
         app_bg = source[source.index('function applyAppBg()'):source.index('$("#appBgPick").onclick')]
         chat_bg = source[source.index('function chatBgOpacity()'):source.index('async function compressChatBg(')]

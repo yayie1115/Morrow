@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -258,7 +259,7 @@ class AppSmokeTest(unittest.TestCase):
             response.close()
 
         response = client.get("/")
-        page = response.get_data(as_text=True)
+        page = expand_frontend(response.get_data(as_text=True))
         response.close()
         self.assertIn('id="chatLiveStatus"', page)
         self.assertIn("chatLiveStatus.replaceChildren(pill)", page)
@@ -279,7 +280,7 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(payload["version"], "v0.1.0")
         self.assertEqual(payload["commit_short"], "ba16f43")
         response = client.get("/")
-        page = response.get_data(as_text=True)
+        page = expand_frontend(response.get_data(as_text=True))
         response.close()
         self.assertIn('id="nookVersion"', page)
         self.assertIn('api("/api/version")', page)

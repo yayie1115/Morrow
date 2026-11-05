@@ -23,11 +23,11 @@ class PresenceChatTest(unittest.TestCase):
         self.stack.enter_context(patch('app.threading.Thread'))
         app.init_db()
         with closing(sqlite3.connect(self.path)) as db, db:
-            db.executescript("CREATE TABLE presence_state(id INTEGER PRIMARY KEY,state_json TEXT,last_tick_at TEXT,last_error TEXT); CREATE TABLE presence_events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT);")
+            db.executescript("CREATE TABLE IF NOT EXISTS presence_state(id INTEGER PRIMARY KEY,state_json TEXT,last_tick_at TEXT,last_error TEXT); CREATE TABLE IF NOT EXISTS presence_events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT);")
             self.sid=db.execute("INSERT INTO sessions(title) VALUES ('Synthetic chat')").lastrowid
             self.uid=db.execute("INSERT INTO messages(session_id,role,content) VALUES (?,'user','Synthetic user message')",(self.sid,)).lastrowid
             db.execute("INSERT INTO settings VALUES ('presence_engine',?)", (json.dumps({'enabled':True}),))
-            db.execute('INSERT INTO presence_state VALUES (1,?,?,?)',(json.dumps({'connection':.4,'pride':.4,'valence':.5}),str(datetime.now()),''))
+            db.execute('INSERT OR REPLACE INTO presence_state(id,state_json,last_tick_at,last_error) VALUES (1,?,?,?)',(json.dumps({'connection':.4,'pride':.4,'valence':.5}),str(datetime.now()),''))
 
     def tearDown(self):
         self.stack.close()

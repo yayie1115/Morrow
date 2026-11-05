@@ -1,0 +1,6 @@
+{
+  "name": "jiwen-vendor",
+  "private": true,
+  "type": "commonjs",
+  "main": "jiwen.js"
+}

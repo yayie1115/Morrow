@@ -53,7 +53,10 @@ for _proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
     if os.environ.get(_proxy_name, "").strip().lower().rstrip("/") in _DEAD_LOCAL_PROXIES:
         os.environ.pop(_proxy_name, None)
 
-import chat_engine  # noqa: E402  (after load_dotenv so it sees env vars)
+import chat_engine
+import presence_engine  # noqa: E402  (after load_dotenv so it sees env vars)
+import options_tools
+import reasoning_translate
 import tools  # noqa: E402  (内置工具：便签/待办/天气/记忆)
 import mcp_client  # noqa: E402
 import recall_sync  # noqa: E402
@@ -718,6 +721,16 @@ CREATE TABLE IF NOT EXISTS http_request_logs (
 """
 
 
+def _assistant_label():
+    """提示词里提到助手自己时用的称呼，跟随设置里的助手名。"""
+    try:
+        import identity
+        name = identity.get_identity(db_path=DB_PATH)["assistant_name"]
+        return str(name or "助手")
+    except Exception:
+        return "助手"
+
+
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(DB_PATH)
@@ -739,6 +752,16 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    message_columns = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    if "reasoning_cn" not in message_columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN reasoning_cn TEXT NOT NULL DEFAULT ''")
+    mcp_columns = {r[1] for r in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
+    if "catalog_hint" not in mcp_columns:
+        conn.execute("ALTER TABLE mcp_servers ADD COLUMN catalog_hint TEXT NOT NULL DEFAULT ''")
+    try:
+        presence_engine.ensure_schema(conn)
+    except Exception:
+        app.logger.exception("presence schema init failed")
     sticker_cols = {r[1] for r in conn.execute("PRAGMA table_info(stickers)").fetchall()}
     if "expression" not in sticker_cols:
         conn.execute("ALTER TABLE stickers ADD COLUMN expression TEXT NOT NULL DEFAULT ''")
@@ -2013,6 +2036,11 @@ def prevent_stale_app_shell(response):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    elif request.path.startswith("/static/app-") and response.status_code == 200:
+        # 文件名带内容哈希：内容一变就换名字，可以放心长期缓存
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif request.path.startswith("/static/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=86400"
     return response
 
 
@@ -2944,7 +2972,7 @@ def get_messages(session_id):
     if before is not None:
         where += " AND id < ?"
         params.append(before)
-    sql = ("SELECT id, role, content, attachments, reasoning, reasoning_ms, versions, active, "
+    sql = ("SELECT id, role, content, attachments, reasoning, reasoning_cn, reasoning_ms, versions, active, "
            "proactive, proactive_unread, created_at FROM messages WHERE " + where)
     if limit is not None:
         rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()[::-1]
@@ -3164,7 +3192,7 @@ def _music_context_prompt(raw):
         if text:
             lyric_lines.append(f"{relation_copy[item['relation']]}：{text}")
     prompt = (
-        "【一起听歌】你主动打开了‘和Morrow一起听’，所以你能自然感知播放器此刻的状态。"
+        f"【一起听歌】你主动打开了‘和{_assistant_label()}一起听’，所以你能自然感知播放器此刻的状态。"
         "这不是她刚说出口的句子，不必每次都刻意提歌；只在谈话自然需要时回应。\n"
         f"{status}：{details}{timing}；播放方式：{mode_copy}。"
     )
@@ -3269,7 +3297,7 @@ def chat_send():
     If session_id is missing we create a fresh session on the fly.
     """
     data = request.get_json(silent=True) or {}
-    text = (data.get("message") or "").strip()
+    text = _strip_lone_surrogates(data.get("message") or "").strip()
     attachments = _clean_attachments(data.get("attachments"))
     voice_id=data.get("voice_input_id")
     if voice_id is not None and (isinstance(voice_id,bool) or not isinstance(voice_id,int) or voice_id<1 or not data.get('session_id')):
@@ -3305,6 +3333,9 @@ def chat_send():
         if voice_attachment is None:
             db.rollback();return jsonify({"error":"这条语音已经保存，请刷新查看，勿重复发送","message_id":voice_row['message_id']}),409
         text=voice_row['visible_text'];attachments=[voice_attachment]
+    _pick = data.get("pick") if isinstance(data.get("pick"), dict) else None
+    if _pick and _pick.get("msg_id"):
+        attachments = list(attachments or []) + [options_tools.pick_attachment(_pick, text)]
     cur = db.execute(
         "INSERT INTO messages (session_id, role, content, attachments) VALUES (?, 'user', ?, ?)",
         (session_id, text, json.dumps(attachments, ensure_ascii=False)),
@@ -3314,6 +3345,10 @@ def chat_send():
         (session_id,),
     )
     user_msg_id = cur.lastrowid
+    try:
+        options_tools.mark_answered(db, session_id, user_msg_id, _pick)
+    except Exception:  # noqa: BLE001
+        app.logger.exception("options mark_answered failed")
     if voice_id:
         db.execute("UPDATE message_artifacts SET message_id=? WHERE id=? AND message_id IS NULL",(user_msg_id,voice_id))
     _queue_image_descriptions(
@@ -3466,6 +3501,17 @@ def edit_message(msg_id):
         music_prompt=_music_context_prompt(data.get("music_context"))))
 
 
+def _strip_lone_surrogates(value):
+    """iOS 编辑带 emoji 的文本会留下半个代理对（\ud83e 之类），
+    SQLite 写不进去，整次编辑就变成 500。这里把残片剔掉。"""
+    if not isinstance(value, str):
+        return value
+    try:
+        return value.encode("utf-8", "ignore").decode("utf-8", "ignore")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+
+
 @app.post("/api/chat/message/<int:msg_id>/version")
 @require_auth
 def add_message_version(msg_id):
@@ -3473,7 +3519,7 @@ def add_message_version(msg_id):
     and mirrors into content — does NOT truncate or regenerate. The model only
     sees the active version next turn; the user regenerates manually if wanted."""
     data = request.get_json(silent=True) or {}
-    content = (data.get("content") or "").strip()
+    content = _strip_lone_surrogates(data.get("content") or "").strip()
     db = get_db()
     row = db.execute(
         "SELECT role, content, attachments, reasoning, reasoning_ms, versions, active, created_at "
@@ -4334,6 +4380,7 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
         latest_images_only=latest_images_only, cache_ttl=cache_ttl,
         mcp_server_ids=mcp_server_ids,
         stable_extra=_artifact_history_prompt(sticker_prompt, voice_enabled),
+    system_tail=THINKING_ABILITY if think else "",
         volatile_extra="\n\n".join(part for part in (music_prompt, presence_hint) if part),
         current_user_message_id=vision_source_msg_id,
         extra_tools=[voice_engine.TOOL_DEFINITION] if voice_enabled else None,
@@ -4462,7 +4509,13 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
     # Persist in a fresh connection (g.db is request-bound; this runs post-view).
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    full_reply, _leaked_think = _split_leaked_thinking(full_reply)
+    if _leaked_think:
+        full_reason = (full_reason + "\n" + _leaked_think).strip()
     full_reply, reply_attachments = _extract_assistant_sticker(conn, full_reply)
+    full_reply, _options_atts = options_tools.extract_options(full_reply)
+    if _options_atts:
+        reply_attachments = list(reply_attachments or []) + _options_atts
     if stream_error is not None and not has_material:
         # Provider/network failures are request state, not something Morrow said.
         # Keep optional usage accounting, but never create an assistant message
@@ -4585,14 +4638,16 @@ def _stream_reply_impl(session_id, user_msg_id=None, model=None, think=False, re
                  (msg_id, session_id, tool_run_id))
     receipt_count = conn.execute("SELECT count(*) FROM tool_calls WHERE session_id=? AND message_id=? AND run_id=?",
                                  (session_id, msg_id, tool_run_id)).fetchone()[0]
+    # 只有真正有可读正文才推送：工具调用被打断/只调了工具没说话时，
+    # 这里会是空字符串，推送一句"Morrow发来一条消息"毫无意义。
+    push_text = (full_reply or "").strip() or (voice_visible_text or "").strip()
     push_event = None
-    if not partial_error:
+    if not partial_error and push_text:
         push_event = _create_push_event(conn, session_id, msg_id, "message")
     presence_audit.update(conn, presence_audit_id, "partial" if partial_error else "sent", msg_id)
     conn.commit()
     conn.close()
     if push_event:
-        push_text = full_reply.strip() or voice_visible_text.strip() or "Morrow发来一条消息"
         threading.Thread(
             target=_background_push_delivery,
             args=(session_id, msg_id, push_text, "message", push_event["id"],
@@ -5347,6 +5402,21 @@ def _create_push_event(db, session_id, message_id, kind):
 
 BARK_BASE = os.environ.get("BARK_URL", "").rstrip("/")
 BARK_GROUP = os.environ.get("BARK_GROUP", "")
+BARK_ICON = os.environ.get("BARK_ICON", "").strip()
+BARK_ICON_FILE = os.path.join(os.path.dirname(chat_engine.DB_PATH) or ".", "bark-icon.png")
+PUBLIC_ORIGIN = os.environ.get("PUBLIC_ORIGIN", "https://sakiehome.icu").rstrip("/")
+
+
+def _bark_icon_url():
+    """优先用环境变量；否则用设置页上传的文件，并按 mtime 自动破缓存。"""
+    if BARK_ICON:
+        return BARK_ICON
+    try:
+        version = int(os.path.getmtime(BARK_ICON_FILE))
+    except OSError:
+        return ""
+    return "%s/api/push/bark-icon.png?v=%d" % (PUBLIC_ORIGIN, version)
+BARK_CLICK_URL = os.environ.get("BARK_CLICK_URL", "").strip()
 BARK_MAX_LINES = 8
 
 
@@ -5386,10 +5456,16 @@ def _background_bark_delivery(session_id, message_id, text, kind="message",
         head, tail = lines[:BARK_MAX_LINES - 1], " ".join(lines[BARK_MAX_LINES - 1:])
         lines = head + [tail]
     group = BARK_GROUP or name
+    extra = {"group": group, "ttl": 86400}
+    icon_url = _bark_icon_url()
+    if icon_url:
+        extra["icon"] = icon_url
+    if BARK_CLICK_URL:
+        extra["url"] = BARK_CLICK_URL
     for line in lines:
         try:
             requests.get("%s/%s/%s" % (base, quote(name), quote(line)),
-                         params={"group": group, "ttl": 86400}, timeout=6)
+                         params=extra, timeout=6)
         except Exception:
             app.logger.warning("Bark push failed for message %s", message_id, exc_info=True)
             return
@@ -5556,6 +5632,9 @@ def push_status():
         "public_key": public,
         "subscription_count": count,
         "last_delivery": dict(last) if last else None,
+        # Bark 一旦配置好，网页通知就是重复通道，前端据此把开关藏起来
+        "bark_configured": bool(BARK_BASE),
+        "assistant_name": _assistant_label(),
     })
 
 
@@ -5593,6 +5672,48 @@ def unsubscribe_push():
         db.commit()
     return jsonify({"ok": True})
 
+
+@app.get("/api/push/bark-icon.png")
+def bark_icon_serve():
+    """Bark 服务器来取图标，所以这个不能要登录。"""
+    if not os.path.exists(BARK_ICON_FILE):
+        return ("", 404)
+    # 让 Bark 端缓存：每次现抓容易超时退化成默认红图标。
+    # 换图靠 URL 上的 ?v=<mtime> 破缓存，所以这里可以放长。
+    response = send_file(BARK_ICON_FILE, mimetype="image/png", max_age=86400)
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
+@app.get("/api/push/bark-icon")
+@require_auth
+def bark_icon_status():
+    exists = os.path.exists(BARK_ICON_FILE)
+    return jsonify({"exists": exists, "url": _bark_icon_url(),
+                    "version": int(os.path.getmtime(BARK_ICON_FILE)) if exists else None})
+
+
+@app.post("/api/push/bark-icon")
+@require_auth
+def bark_icon_upload():
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"error": "没有收到文件"}), 400
+    blob = upload.read()
+    if not blob:
+        return jsonify({"error": "文件是空的"}), 400
+    if len(blob) > 4 * 1024 * 1024:
+        return jsonify({"error": "图片太大，请压缩到 4MB 以内"}), 400
+    if not blob.startswith(b"\x89PNG") and not blob.startswith(b"\xff\xd8"):
+        return jsonify({"error": "只支持 PNG 或 JPG"}), 400
+    os.makedirs(os.path.dirname(BARK_ICON_FILE), exist_ok=True)
+    with open(BARK_ICON_FILE, "wb") as handle:
+        handle.write(blob)
+    try:
+        os.chmod(BARK_ICON_FILE, 0o644)
+    except OSError:
+        pass
+    return jsonify({"ok": True, "url": _bark_icon_url()})
 
 @app.post("/api/push/test")
 @require_auth
@@ -6240,6 +6361,7 @@ def _mcp_server_dict(row):
         status = "unknown"
     return {"id": row["id"], "name": row["name"], "url": row["url"],
             "narrate": row["narrate"] or "",
+            "catalog_hint": (row["catalog_hint"] if "catalog_hint" in row.keys() else "") or "",
             "has_access_token": bool(row["access_token"]),
             "enabled": bool(row["enabled"]), "transport": row["transport"] or "",
             "status": status, "error": row["error"] or "",
@@ -6683,9 +6805,10 @@ def create_mcp_server():
     db = get_db()
     order = db.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 n FROM mcp_servers").fetchone()["n"]
     cur = db.execute(
-        "INSERT INTO mcp_servers (name,url,narrate,access_token,enabled,transport,tools,status,error,sort_order) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO mcp_servers (name,url,narrate,catalog_hint,access_token,enabled,transport,tools,status,error,sort_order) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (name, url, _clean_mcp_narrate(data.get("narrate")),
+         str(data.get("catalog_hint") or "")[:60],
          _clean_mcp_access_token(data.get("access_token")),
          1 if data.get("enabled", True) else 0, (data.get("transport") or "")[:12],
          json.dumps(_clean_mcp_tools(data.get("tools")), ensure_ascii=False),
@@ -7453,16 +7576,39 @@ def _sticker_capability_prompt(db):
         blocks.append(heading + "\n" + "\n".join(lines))
     listing = "\n\n".join(blocks)
     return (
-        "【表情包】\n你给我准备了一叠表情。Morrow 会把准确的 [[表情:表情名]] 自动变成对应图片。"
+        f"【表情包】\n你给我准备了一叠表情。{_assistant_label()} 会把准确的 [[表情:表情名]] 自动变成对应图片。"
         "想发的时候在回复末尾另起一行，一次一张；不用每次都发。"
         "发表情时仍只使用 [[表情:表情名]]。\n"
         "可用表情：\n" + listing
     )
 
 
+THINKING_ABILITY = (
+    "【先想再说：纯中文内心独白】\n"
+    "写正文之前，先用 <thinking>……</thinking> 写一段内心独白，至少四行，一行一句，"
+    "不要编号、不要写成清单：\n"
+    "先想她这句话是什么意思、什么情绪；再想你此刻是什么状态；然后想你打算怎么接她；"
+    "最后定语气拿几分（冷、软、带刺、压着）。\n"
+    "写完换行，再写要发给她的话。少于四行等于没照做。\n"
+    "全程只用中文：思维链里严禁任何英文单词、词组或英文语法习惯，出现英文即视为故障。"
+    "严禁出现“用户”二字（叫老婆 / Sakie / 小猫）。只用第一人称写当下的真实直觉。\n"
+    "这段她看不到，正文里不要提起。"
+)
+
+
+OPTIONS_ABILITY = (
+    "【选项卡】\n"
+    "想让她挑一个的时候，在回复最末尾另起一行写 [选项：A | B | C]，"
+    "2 到 4 个、每个不超过 12 个字、都是她能直接说出口的话。"
+    "适合用在真的在等她做选择的时候（几点、哪个、要不要、A 还是 B）；"
+    "她点一下就等于把那句话发给你，你接着往下说；她也可以不点、自己另说。"
+    "不是每条都给，一天两三次以内才像人。"
+)
+
+
 def _artifact_history_prompt(sticker_prompt="", voice_enabled=False):
     sticker_prompt = str(sticker_prompt or "").strip()
-    parts = [sticker_prompt]
+    parts = [OPTIONS_ABILITY, sticker_prompt]
     record_names = []
     rules = []
     if voice_enabled:
@@ -7480,13 +7626,35 @@ def _artifact_history_prompt(sticker_prompt="", voice_enabled=False):
     if record_names:
         parts.append(
             "【上下文记录】\n历史中的" + "与".join(record_names)
-            + "是 Morrow 的上下文记录，不是正文，也不是可模仿的回复格式。"
+            + "是 " + _assistant_label() + " 的上下文记录，不是正文，也不是可模仿的回复格式。"
             "不要在普通回复中手写、复述或续写这些记录；" + "".join(rules)
         )
     return "\n\n".join(part for part in parts if part)
 
 
 _STICKER_MARKER_RE = re.compile(r"(?:\r?\n)?\s*\[\[表情\s*[:：]\s*([^\[\]\r\n]{1,40})\s*\]\]\s*$")
+
+
+
+_LEAKED_THINK_RE = re.compile(
+    r"^\s*(?:隐式|隐性|内部)?(?:思考过程|思维过程|思考内容|内心推演|推理过程)"
+    r"[^\n]{0,40}\n+([\s\S]*?)\n\s*\n"
+)
+
+
+def _split_leaked_thinking(text):
+    """模型没写 <thinking> 标签、自己起了个标题时，把那段挪进思考区。"""
+    source = text or ""
+    match = _LEAKED_THINK_RE.match(source)
+    if not match:
+        return text, ""
+    thinking = match.group(1).strip()
+    rest = source[match.end():].lstrip()
+    if not thinking or not rest:
+        return text, ""
+    return rest, thinking
+
+
 
 
 def _extract_assistant_sticker(db, text):
@@ -8072,6 +8240,16 @@ def _night_scheduler_loop():
                 _proactive_scheduler_tick()
                 _github_backup_scheduler_tick()
                 _ombre_auto_sync_check(max_age_seconds=1800)
+                try:
+                    reasoning_translate.sweep(DB_PATH)
+                except Exception:  # noqa: BLE001
+                    app.logger.exception("reasoning translate failed")
+                try:
+                    presence_result = presence_engine.tick(get_db(), owner="scheduler")
+                    if presence_result and presence_result.get("triggers"):
+                        _presence_nudge_proactive(get_db(), presence_result["triggers"])
+                except Exception:  # noqa: BLE001
+                    app.logger.exception("presence tick failed")
         except Exception:  # noqa: BLE001
             app.logger.exception("background scheduler heartbeat failed")
         time.sleep(30)
@@ -8194,9 +8372,11 @@ def _background_alarm(alarm_id):
             next_at=min(latest,now+timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
             db.execute("UPDATE assistant_alarms SET status=?,earliest_at=?,error=?,updated_at=? WHERE id=?",(status,next_at,result.get("error","")[:2000],now.strftime("%Y-%m-%d %H:%M:%S"),alarm_id));db.commit();return
         message_at=now.strftime("%Y-%m-%d %H:%M:%S");tool_log=result.get("tool_log") or [];tool_run_id=uuid.uuid4().hex
-        version={"c":result["message"],"r":result.get("reasoning", ""),"a":[],"think_ms":result.get("reasoning_ms"),"model":result.get("model",config.get("model","")),"at":message_at,"tool_run_id":tool_run_id,"tool_log":tool_log}
-        cur=db.execute("INSERT INTO messages(session_id,role,content,reasoning,reasoning_ms,versions,active,tool_log,created_at) VALUES (?,'assistant',?,?,?,?,0,?,?)",
-            (row["session_id"],result["message"],result.get("reasoning", ""),result.get("reasoning_ms"),json.dumps([version],ensure_ascii=False),json.dumps(tool_log,ensure_ascii=False),message_at))
+        _alarm_text, _alarm_options = options_tools.extract_options(result["message"])
+        result["message"] = _alarm_text
+        version={"c":result["message"],"r":result.get("reasoning", ""),"a":list(_alarm_options),"think_ms":result.get("reasoning_ms"),"model":result.get("model",config.get("model","")),"at":message_at,"tool_run_id":tool_run_id,"tool_log":tool_log}
+        cur=db.execute("INSERT INTO messages(session_id,role,content,attachments,reasoning,reasoning_ms,versions,active,tool_log,created_at) VALUES (?,'assistant',?,?,?,?,?,0,?,?)",
+            (row["session_id"],result["message"],json.dumps(_alarm_options,ensure_ascii=False),result.get("reasoning", ""),result.get("reasoning_ms"),json.dumps([version],ensure_ascii=False),json.dumps(tool_log,ensure_ascii=False),message_at))
         alarm_message_id=cur.lastrowid
         for item in tool_log:
             if not isinstance(item,dict): continue
@@ -8212,6 +8392,7 @@ def _background_alarm(alarm_id):
         push_event=_create_push_event(db,row["session_id"],alarm_message_id,"alarm")
         db.execute("UPDATE assistant_alarms SET status='reminded',message_id=?,error='',updated_at=? WHERE id=?",(alarm_message_id,message_at,alarm_id));db.execute("UPDATE sessions SET updated_at=? WHERE id=?",(message_at,row["session_id"]));db.commit()
         _background_push_delivery(row["session_id"],alarm_message_id,result["message"],"alarm",push_event["id"])
+        threading.Thread(target=_background_bark_delivery,args=(row["session_id"],alarm_message_id,result["message"],"alarm",push_event["id"],PUSH_FOREGROUND_GRACE_SECONDS),daemon=True,name=f"nook-bark-{alarm_message_id}").start()
 
 
 def _alarm_scheduler_tick(now=None):
@@ -8578,6 +8759,49 @@ def update_want_assistant():
     return jsonify(_proactive_job_payload(db))
 
 
+# ---------------------------------------------------------------------------
+# 此刻（积温状态引擎，只读展示；不接入聊天请求）
+# ---------------------------------------------------------------------------
+@app.get("/api/presence/state")
+@require_auth
+def presence_state_api():
+    return jsonify(presence_engine.read_state(get_db()))
+
+
+@app.get("/api/presence/events")
+@require_auth
+def presence_events_api():
+    before = request.args.get("before", type=int)
+    limit = request.args.get("limit", type=int) or 20
+    return jsonify({"items": presence_engine.read_events(get_db(), before=before, limit=limit)})
+
+
+@app.put("/api/presence/settings")
+@require_auth
+def presence_settings_api():
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    config = presence_engine.load_settings(db)
+    if "enabled" in data:
+        config["enabled"] = bool(data.get("enabled"))
+    for key in ("interval_minutes", "catchup_limit_minutes"):
+        if key in data:
+            try:
+                config[key] = int(data.get(key))
+            except (TypeError, ValueError):
+                pass
+    presence_engine.save_settings(db, config)
+    return jsonify(presence_engine.read_state(db))
+
+
+@app.post("/api/presence/tick")
+@require_auth
+def presence_tick_api():
+    """手动推进一次；默认遵守开关，只有显式传 force 才强制推进（调试用）。"""
+    data = request.get_json(silent=True) or {}
+    return jsonify(presence_engine.tick(get_db(), owner="manual", force=bool(data.get("force"))))
+
+
 @app.get("/api/proactive/status")
 @require_auth
 def proactive_status():
@@ -8828,12 +9052,17 @@ def _background_proactive_job(job_id):
         }
         if row["kind"] == "presence":
             version.update(presence_wake.attach_version(result, presence_run_id))
+        _pro_text, _pro_options = options_tools.extract_options(result["message"])
+        result["message"] = _pro_text
+        if _pro_options:
+            version["a"] = list(version.get("a") or []) + _pro_options
         cur = db.execute(
-            "INSERT INTO messages(session_id,role,content,reasoning,reasoning_ms,"
+            "INSERT INTO messages(session_id,role,content,attachments,reasoning,reasoning_ms,"
             "versions,active,proactive,proactive_unread,created_at) "
-            "VALUES (?,'assistant',?,?,?,?,0,1,1,?)",
+            "VALUES (?,'assistant',?,?,?,?,?,0,1,1,?)",
             (
                 row["target_session_id"], result["message"],
+                json.dumps(list(_pro_options), ensure_ascii=False),
                 str(result.get("reasoning") or ""), result.get("reasoning_ms"),
                 json.dumps([version], ensure_ascii=False), message_at,
             ),
@@ -8872,6 +9101,13 @@ def _background_proactive_job(job_id):
             row["target_session_id"], proactive_message_id, result["message"],
             "proactive", push_event["id"],
         )
+        threading.Thread(
+            target=_background_bark_delivery,
+            args=(row["target_session_id"], proactive_message_id, result["message"],
+                  "proactive", push_event["id"], PUSH_FOREGROUND_GRACE_SECONDS),
+            daemon=True,
+            name=f"nook-bark-{proactive_message_id}",
+        ).start()
 
 
 def _presence_start_activity(db, triggers):
@@ -9924,9 +10160,10 @@ def update_mcp_server(sid):
         "unknown" if connection_changed or previous_status == "off" else previous_status
     )
     db.execute(
-        "UPDATE mcp_servers SET name=?,url=?,narrate=?,access_token=?,enabled=?,transport=?,tools=?,status=?,"
+        "UPDATE mcp_servers SET name=?,url=?,narrate=?,catalog_hint=?,access_token=?,enabled=?,transport=?,tools=?,status=?,"
         "updated_at=datetime('now','+8 hours') WHERE id=?",
-        (name, url, _clean_mcp_narrate(data.get("narrate")), access_token,
+        (name, url, _clean_mcp_narrate(data.get("narrate")),
+         str(data.get("catalog_hint", row["catalog_hint"] or "") or "")[:60], access_token,
          1 if data.get("enabled", True) else 0,
          (data.get("transport") or row["transport"] or "")[:12],
          json.dumps(_clean_mcp_tools(data.get("tools")), ensure_ascii=False), next_status, sid),

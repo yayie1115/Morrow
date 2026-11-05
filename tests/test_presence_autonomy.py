@@ -46,7 +46,7 @@ class PresenceActivityTest(unittest.TestCase):
         self.old=app.DB_PATH,app.DATA_DIR,app.UPLOAD_DIR
         app.DB_PATH=str(self.root/'nook.db');app.DATA_DIR=str(self.root);app.UPLOAD_DIR=str(self.root/'uploads');app.init_db()
         self.db=sqlite3.connect(app.DB_PATH);self.db.row_factory=sqlite3.Row
-        self.db.executescript("CREATE TABLE presence_state(id INTEGER,state_json TEXT); INSERT INTO presence_state VALUES(1,'{}'); CREATE TABLE presence_events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT);")
+        self.db.executescript("CREATE TABLE IF NOT EXISTS presence_state(id INTEGER,state_json TEXT); INSERT OR REPLACE INTO presence_state(id,state_json) VALUES(1,'{}'); CREATE TABLE IF NOT EXISTS presence_events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,action TEXT,reason TEXT,detail_json TEXT);")
         self.db.execute('INSERT INTO settings VALUES (?,?)',('presence_engine',json.dumps({'enabled':True})))
         self.sid=self.db.execute("INSERT INTO sessions(title) VALUES ('Synthetic activity')").lastrowid;self.db.commit()
         self.now=datetime(2026,11,3,15,0)

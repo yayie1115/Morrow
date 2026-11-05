@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import sqlite3
 import unittest
 import tempfile
@@ -123,7 +124,7 @@ class IdentityTest(unittest.TestCase):
 
 class SettingsIdentityContractTest(unittest.TestCase):
     def test_alarm_and_mcp_copy_refresh_with_shared_identity(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn('function renderIdentity(){\n  renderAssistantSettingsCopy();', page)
         for node in ('mcpEnableIdentityCopy', 'mcpNarrateIdentityCopy', 'alarmFutureIdentityCopy'):
             self.assertEqual(page.count('id="' + node + '"'), 1)

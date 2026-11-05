@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import base64
 import json
 import os
@@ -157,7 +158,7 @@ class TtsPreviewTest(unittest.TestCase):
 
     def test_tts_entry_and_lab_exist_in_app_shell(self):
         response = self.client.get("/")
-        page = response.get_data(as_text=True)
+        page = expand_frontend(response.get_data(as_text=True))
         response.close()
         for contract in (
             'data-panel="tts"', 'id="set-panel-tts"', 'id="ttsScript"',

@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 from contextlib import closing
 from pathlib import Path
 import shutil
@@ -72,7 +73,7 @@ class TogetherSettingsTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_calendar_count_and_date_form_save(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         code = source[source.index('let TOGETHER_DATE='):source.index('// We uses the same bottom sheet')]
         script = """
 const assert=require('node:assert/strict'),nodes=new Map(),button={disabled:false};

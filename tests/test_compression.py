@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import os
 import json
 import sqlite3
@@ -427,7 +428,7 @@ class CompressionTest(unittest.TestCase):
 
     def test_frontend_has_auto_settings_and_summary_ledger(self):
         with open(os.path.join(os.getcwd(), "static", "index.html"), encoding="utf-8") as source:
-            html = source.read()
+            html = expand_frontend(source.read())
         for element_id in (
             "autoCompressCard", "autoCompressTargets", "autoCompressTokens", "autoCompressRecent",
             "autoCompressLogs", "tidyMenuBtn", "tidyDrawer", "tidyNav",

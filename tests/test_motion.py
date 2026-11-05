@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import unittest
 import shutil
 import subprocess
@@ -7,7 +8,7 @@ from pathlib import Path
 class MotionContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = Path("static/index.html").read_text(encoding="utf-8")
+        cls.page = frontend_source()
 
     def test_chat_menu_animates_from_button_and_cleans_up_on_close(self):
         self.assertIn('@keyframes chat-menu-in', self.page)

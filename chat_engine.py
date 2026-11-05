@@ -50,6 +50,9 @@ TOOL_REPLAY_RESULT_CHARS = int(os.environ.get("TOOL_REPLAY_RESULT_CHARS", "300")
 TOOL_REPLAY_ERROR_CHARS = int(os.environ.get("TOOL_REPLAY_ERROR_CHARS", "300"))
 TOOL_REPLAY_ARGS_CHARS = int(os.environ.get("TOOL_REPLAY_ARGS_CHARS", "400"))
 TOOL_REPLAY_BUDGET_CHARS = int(os.environ.get("TOOL_REPLAY_BUDGET_CHARS", "8000"))
+# 工具参数的回放预算：最近几轮完整保留，久远的压缩
+TOOL_REPLAY_ARGS_BUDGET_CHARS = int(os.environ.get("TOOL_REPLAY_ARGS_BUDGET_CHARS", "6000"))
+TOOL_REPLAY_ARGS_RECENT_ROWS = int(os.environ.get("TOOL_REPLAY_ARGS_RECENT_ROWS", "5"))
 
 # Anthropic Messages API needs max_tokens (it's required) and a version header.
 ANTHROPIC_VERSION = os.environ.get("ANTHROPIC_VERSION", "2023-06-01")
@@ -483,6 +486,10 @@ def build_system_sections(recall_query=None, recall_session_id=None, recall_user
               "【当前称呼】\n" + json.dumps({"用户": names["user_name"], "助手": names["assistant_name"]}, ensure_ascii=False)
               + "\n以上是当前显示称呼；历史记录可能保留旧称呼。用户以她称呼，助手的第三人称代称为"
               + names["assistant_pronoun"] + "。代称不改写既有人设或历史内容。"]
+    stable.append(
+        "【思考语言】\n"
+        "内部思考过程和推理也用中文写，不要用英文。对用户可见的回复保持原有的中文风格。"
+    )
     volatile = []
 
     memory = get_memory_entries("fixed")
@@ -780,7 +787,7 @@ def _normalise_context_limit(value):
     return min(limit, CHAT_CONTEXT_MAX)
 
 
-def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
+def _allowed_image_keys(rows, image_limit=None, latest_images_only=False, current_message_id=None):
     allowed = set()
     remaining = image_limit
     budget = max(0, CHAT_IMAGE_BUDGET_BYTES)
@@ -798,6 +805,10 @@ def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
         if not image_indices:
             continue
         if latest_images_only:
+            # 只带"本轮这条消息"的图：历史图片不再每轮重发。
+            # 没指定当前消息时（主动消息/闹钟等）沿用旧行为，取最新一条带图消息。
+            if current_message_id is not None and int(r["id"]) != int(current_message_id):
+                continue
             return {(r["id"], i) for i in image_indices}
         for i in reversed(image_indices):
             if remaining is not None and remaining <= 0:
@@ -818,6 +829,8 @@ def _allowed_image_keys(rows, image_limit=None, latest_images_only=False):
             break
         if remaining is not None and remaining <= 0:
             break
+    if latest_images_only and current_message_id is not None:
+        return set()                # 只带本轮：本轮没有图就一张都不带
     if not trimmed and image_limit is None:
         return None                 # 没有裁剪，保持原来的"全部图片"行为
     return allowed
@@ -869,6 +882,19 @@ def _replay_tool_payloads(rows, budget=TOOL_REPLAY_BUDGET_CHARS, max_rows=HISTOR
     slots=max(1,int(max_rows or HISTORY_LIMIT),len(rows))
     row_budget=max(0,int(budget))//slots
     payloads={}
+    tool_rows=[row for row in rows if row["role"]=="assistant" and row["tool_log"]]
+    recent=tool_rows[-max(0,TOOL_REPLAY_ARGS_RECENT_ROWS):] if TOOL_REPLAY_ARGS_RECENT_ROWS>0 else []
+    older=tool_rows[:-len(recent)] if recent else tool_rows
+    args_allow={}
+    remaining=max(0,TOOL_REPLAY_ARGS_BUDGET_CHARS)
+    for row in recent:
+        allowance=min(TOOL_REPLAY_ARGS_CHARS,remaining)
+        args_allow[row["id"]]=allowance
+        remaining-=allowance
+    if older:
+        share=remaining//len(older) if remaining>0 else 0
+        for row in older:
+            args_allow[row["id"]]=share
     for row in rows:
         if row["role"]!="assistant" or not row["tool_log"]:continue
         try:items=json.loads(row["tool_log"])
@@ -877,11 +903,15 @@ def _replay_tool_payloads(rows, budget=TOOL_REPLAY_BUDGET_CHARS, max_rows=HISTOR
         items=[v for v in items if isinstance(v,dict)]
         if not items:continue
         each=row_budget//len(items)
+        args_each=max(0,args_allow.get(row["id"],0))//len(items)
         kept=[]
         for item in items:
             content=_replay_tool_content(item)
             if len(content)>each:content=_replay_text(content,each) if each else ""
-            kept.append((str(item.get("name") or "tool"),_replay_args_json(item),content))
+            args_text=_replay_args_json(item)
+            if len(args_text)>args_each:
+                args_text=_replay_text(args_text,args_each) if args_each else ""
+            kept.append((str(item.get("name") or "tool"),args_text,content))
         payloads[row["id"]]=kept
     return payloads
 
@@ -1075,6 +1105,7 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
         rows,
         image_limit=image_limit,
         latest_images_only=latest_images_only,
+        current_message_id=current_user_message_id,
     ) if include_images else None
 
     out = []
@@ -1180,6 +1211,14 @@ def get_history(session_id, limit=HISTORY_LIMIT, exclude_id=None, include_images
             elif original_image_count and not include_images and not message_text.strip():
                 message_text = "（用户发了一张图片，但当前模型不支持识图；图片内容没有发送给模型。）"
             message_text = time_prefix + message_text
+            if r["role"] == "user":
+                try:
+                    import options_tools
+                    pick_tail = options_tools.pick_tail(row_attachments)
+                except Exception:  # noqa: BLE001
+                    pick_tail = ""
+                if pick_tail:
+                    message_text = message_text + " " + pick_tail
             out.append({
                 "role": r["role"],
                 "content": _message_content(message_text, sent_attachments,
@@ -1253,6 +1292,7 @@ class _ThinkSplitter:
         self.pending_think = None
         self.marker_close = ""
         self.pre_reasoning = ""
+        self.think_chars = 0
 
     def _find_marker(self, text):
         """返回 (start, end)；标记必须靠近行首，且前面的杂字符不超过阈值。"""
@@ -1405,6 +1445,48 @@ class _ThinkSplitter:
             index = text.find("🫧", index + 1)
         return None
 
+    REPLY_EMOJI = "💭🧠🤍🩷💗💓💞💕❤🖤💙💚💛🧡💜"
+
+    def _reply_emoji_cut(self, text):
+        """独白里以 💭 / 🧠 / 爱心类 emoji 开头的短句，判定为正文起点。"""
+        best = None
+        for index, char in enumerate(text):
+            if char not in self.REPLY_EMOJI:
+                continue
+            line_start = text.rfind("\n", 0, index) + 1
+            if text[line_start:index].strip():
+                continue
+            rest = text[index + 1:]
+            line_end = rest.find("\n")
+            line = rest if line_end < 0 else rest[:line_end]
+            body = line.lstrip("\uFE0F")
+            if body and not body[:1].isspace() and len(body.strip()) <= 40:
+                best = index
+        return best
+
+    EMOJI_LEAD = re.compile(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF]")
+
+    def _emoji_cut(self, text):
+        """独白里以 emoji 紧贴文字开头的一行，通常就是正文的第一句。
+
+        只认"行首 + emoji 后面紧跟文字（没有空格）"的写法；像「✅ 已完成」这种
+        符号+空格的清单项不切，避免把思考里的勾选列表当成正文。
+        """
+        index = 0
+        while True:
+            match = self.EMOJI_LEAD.search(text, index)
+            if not match:
+                return None
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            if not text[line_start:match.start()].strip():
+                rest = text[match.end():]
+                line_end = rest.find("\n")
+                line = rest if line_end < 0 else rest[:line_end]
+                body = line.lstrip("\uFE0F")
+                if body and not body[:1].isspace() and len(body.strip()) <= 40:
+                    return match.start()
+            index = match.end()
+
     def _planning_cut(self, text):
         """中文计划句独占一行时，行尾就是思考的终点（下一行是正文）。"""
         best = None
@@ -1514,6 +1596,16 @@ class _ThinkSplitter:
                     self.marker_think = False
                     self._drop_decoration()
                     continue
+                # emoji 紧贴文字独占一行：通常就是正文的第一句
+                emoji_cut = self._emoji_cut(self.buf)
+                if emoji_cut is not None:
+                    if emoji_cut > 0:
+                        out.append(("reasoning", self.buf[:emoji_cut]))
+                    self.buf = self.buf[emoji_cut:]
+                    self.in_think = False
+                    self.marker_think = False
+                    self._drop_decoration()
+                    continue
                 # 中文计划句独占一行：下一行就是正文，别等空行把它也吞掉
                 planning_cut = self._planning_cut(self.buf)
                 if planning_cut is not None:
@@ -1555,6 +1647,16 @@ class _ThinkSplitter:
             kind = "reasoning" if self.in_think else "delta"
             idx, tag = self._first(self.buf, tags)
             if idx == -1:
+                if self.in_think and self.think_chars > 80:
+                    reply_cut = self._reply_emoji_cut(self.buf)
+                    if reply_cut is not None:
+                        if reply_cut > 0:
+                            out.append(("reasoning", self.buf[:reply_cut]))
+                        self.buf = self.buf[reply_cut:]
+                        self.in_think = False
+                        self.marker_think = False
+                        self._drop_decoration()
+                        continue
                 safe = len(self.buf) - self._hold(self.buf, tags)
                 if safe > 0:
                     out.append((kind, self.buf[:safe]))
@@ -1564,6 +1666,7 @@ class _ThinkSplitter:
                 out.append((kind, self.buf[:idx]))
             self.buf = self.buf[idx + len(tag):]
             self.in_think = not self.in_think
+        self.think_chars += sum(len(text) for kind, text in out if kind == "reasoning")
         return out
 
     def flush(self):
@@ -1658,7 +1761,7 @@ def _history_with_runtime_context(history, volatile):
 @serein_connection.chat_scope
 def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_id=None,
                 context_limit=HISTORY_LIMIT, image_limit=None, latest_images_only=False,
-                cache_ttl="off", ephemeral_user_message="", stable_extra="",
+                cache_ttl="off", ephemeral_user_message="", stable_extra="", system_tail="",
                 volatile_extra="", extra_tools=None, extra_executor=None,
                 extra_narrations=None, max_tool_rounds=None,
                 closing_tool_names=None, closing_prompt="",
@@ -1740,6 +1843,9 @@ def stream_chat(session_id, model=None, think=False, exclude_id=None, provider_i
     runtime_context = system_sections.get("volatile") or ""
     system_sections["volatile"] = ""
     system = system_sections["stable"]
+    if str(system_tail or "").strip():
+        # 放在系统提示最末尾：离生成最近，指令服从率最高
+        system = system + "\n\n" + str(system_tail).strip()
     context_limit = _normalise_context_limit(context_limit)
     history = get_history(
         session_id,
@@ -2418,12 +2524,15 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
                "max_tokens": CHAT_MAX_TOKENS}
     if "gemini" in model.lower():
         payload["safetySettings"] = _gemini_safety_settings()
+    print("[think] think=%s model=%s" % (bool(think), model), flush=True)
     resolved_tools = tool_definitions if tool_definitions is not None else tools.chat_tool_definitions()
     if resolved_tools:
         payload["tools"] = resolved_tools
-    if think:
-        # DeepSeek V3.1+ hybrid thinking toggle (relay passes it through).
-        payload["chat_template_kwargs"] = {"thinking": True}
+    if think or "deepseek" in model.lower():
+        # DeepSeek 默认会开思考；关掉时要显式传 false，否则思考会吃掉 max_tokens，
+        # 正文变空（主动消息/情绪判定都踩过这个坑）。
+        payload["chat_template_kwargs"] = {"thinking": bool(think)}
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8') + readFileSync(new URL('../static/app.src.js', import.meta.url), 'utf8');
 const capability = html.match(/function isWebPushCapable\(\)\{[\s\S]*?;\}/)?.[0];
 assert(capability, 'Web Push capability detection must be present');
 

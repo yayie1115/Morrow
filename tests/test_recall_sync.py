@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -496,7 +497,7 @@ class RecallSyncTest(unittest.TestCase):
 
     def test_ombre_library_uses_search_cards_and_bottom_sheet(self):
         with open(os.path.join(os.getcwd(), "static", "index.html"), encoding="utf-8") as handle:
-            page = handle.read()
+            page = expand_frontend(handle.read())
         for contract in (
             'id="ombreSearchInput"', 'id="ombreFilterFade"',
             'id="ombreDetailSheet"', 'class="ombre-sheet-lace"',

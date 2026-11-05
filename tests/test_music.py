@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import json
 import os
 import shutil
@@ -264,7 +265,7 @@ class MusicTest(unittest.TestCase):
 
     def test_frontend_has_music_entry_search_and_seekable_player(self):
         response = self.client.get("/")
-        page = response.get_data(as_text=True)
+        page = expand_frontend(response.get_data(as_text=True))
         response.close()
         for marker in ('id="btnMusic"', 'id="musicSheet"', 'id="musicPlayer"', 'id="musicDetail"', 'id="musicDetailSeek"', 'id="musicQueueSheet"'):
             self.assertIn(marker, page)

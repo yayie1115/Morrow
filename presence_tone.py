@@ -23,9 +23,11 @@ def describe(state):
     elif arousal<=-.3:hints.append('精神较放松，语速和节奏可以舒缓些。')
     pride=value('pride')
     if pride>=.35:hints.append('表达保持沉稳克制。')
-    elif pride<=-.25:hints.append('克制比平时少一些，但仍按既有人设表达。')
+    elif pride<=-.25:hints.append('克制比平时少，那股劲直接摆在明面上。')
     if value('immersion')>=.5:hints.append('注意力较集中，表达不必铺陈；状态不能证明正在进行某项实际活动。')
-    if value('lust')>=.6:hints.append('亲近的意愿较强，是否表达亲昵由当前对话和既有人设决定。')
+    lust=value('lust')
+    if lust>=.85:hints.append('欲望与占有欲高涨，想和她亲近一下。')
+    elif lust>=.6:hints.append('亲近的意愿偏强，想离她近一点。')
     return ('【本次主动联系的积温状态参考】\n'+''.join(hints)+
             '\n这是模拟状态提供的轻量表达参考，不是新的人设或必须照做的台词；无需复述状态标签或数值，'
             '不把推算当成真实发生的事。仍可自行决定暂不发送。')[:600]

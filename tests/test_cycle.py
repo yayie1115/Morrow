@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import os
 import json
 import shutil
@@ -215,7 +216,7 @@ class CycleApiTest(unittest.TestCase):
         self.assertEqual(status["delay_days"], 3)
 
     def test_validation_and_auth(self):
-        page = Path("static/index.html").read_text(encoding="utf-8")
+        page = frontend_source()
         self.assertIn('<button data-value="1">来了</button>', page)
         self.assertNotIn('<button data-value="0">没来</button>', page)
         self.assertEqual(

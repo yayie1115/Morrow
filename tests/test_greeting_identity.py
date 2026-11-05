@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Offline regression for default and customized greeting names."""
 from pathlib import Path
 import json
@@ -10,7 +11,7 @@ import unittest
 class GreetingIdentityTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_default_and_custom_name_rendering(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         identity_code = source[source.index('let IDENTITY='):source.index('async function loadIdentity()')]
         greeting_code = source[source.index('const GREET='):source.index('async function loadVisit()')]
         script = """
@@ -85,7 +86,7 @@ assert.equal($('#greeting').textContent,'晚上好。');
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fixed_chat_copy_and_chinese_signature_fonts(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         self.assertIn('const EMPTY_LINES=[["你来啦",""]];', source)
         hints=json.loads(re.search(r"const COMPOSER_HINTS=(\[.*?\]);",source).group(1))
         self.assertEqual(len(hints),20)
@@ -111,7 +112,7 @@ assert.equal($('#greeting').textContent,'晚上好。');
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_greeting_editor_preview_insert_save_and_reset(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         rules = source[source.index('const GREET='):source.index('async function loadVisit()')]
         editor = source[source.index('function readGreetingForm()'):source.index('let homeWeatherText=')]
         script = """
@@ -154,7 +155,7 @@ assert.deepEqual(GREETING_PREFS,defaultGreetingPrefs());
 
     @unittest.skipUnless(shutil.which('node'),'Node unavailable')
     def test_time_only_pool_boundaries_timezone_and_live_boundary(self):
-        source=Path('static/index.html').read_text(encoding='utf-8')
+        source=frontend_source()
         self.assertIn('<label>深夜<textarea id="greetingCommon"',source)
         self.assertNotIn('通用句',source)
         self.assertNotIn('随机模式不分时段',source)
@@ -179,14 +180,14 @@ greetingHour=originalHour;
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_greeting_pool_has_no_private_defaults(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         greeting_code = source[source.index('const GREET='):source.index('async function loadVisit()')]
         for old in ('过来。', '夜宵', '……还不睡', '你知道过了多久', '泡泡里晒太阳', 'GREET.bits'):
             self.assertNotIn(old, greeting_code)
 
     @unittest.skipUnless(shutil.which('node'), 'Node is optional')
     def test_keepsake_and_music_render_actual_author_names(self):
-        source = Path('static/index.html').read_text(encoding='utf-8')
+        source = frontend_source()
         identity_code = source[source.index('let IDENTITY='):source.index('async function loadIdentity()')]
         time_code = source[source.index('function chatTimestamp(value)'):source.index('function fmtTime(ts)')] + source[source.index('function keepsakeDateTime(value'):source.index('function makeKeepsakePhoto(')]
         start = source.index('function renderMusicNotes(')

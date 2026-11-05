@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 """Offline coverage for shared postcard preferences and safe UI rendering."""
 import json
 from pathlib import Path
@@ -60,7 +61,7 @@ class PostcardTest(unittest.TestCase):
             self.assertEqual(client.get('/api/home-postcard').json, values)
 
     def test_retired_postcard_ui_and_preserved_storage(self):
-        source=Path('static/index.html').read_text(encoding='utf-8')
+        source=frontend_source()
         self.assertNotIn('id="homePostcard"',source)
         self.assertNotIn('id="wePostcard"',source)
         self.assertNotIn('loadPostcardSettings()',source)

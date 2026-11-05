@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import os
 import shutil
 import sqlite3
@@ -101,7 +102,7 @@ class HomeAndArchiveTest(unittest.TestCase):
             os.path.join(os.getcwd(), "static", "index.html"),
             encoding="utf-8",
         ) as source:
-            html = source.read()
+            html = expand_frontend(source.read())
         self.assertNotIn('type="date" id="wallDate"', html)
         self.assertIn('id="wallCalendarGrid"', html)
         self.assertIn('attachLongPress(d,()=>openNoteAction(n));', html)

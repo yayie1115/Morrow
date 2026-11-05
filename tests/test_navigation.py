@@ -1,3 +1,4 @@
+from frontend_source import frontend_source, expand_frontend
 import unittest
 from pathlib import Path
 
@@ -5,7 +6,7 @@ from pathlib import Path
 class NavigationHistoryContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = Path("static/index.html").read_text(encoding="utf-8")
+        cls.page = frontend_source()
 
     def test_android_back_uses_a_home_rooted_history_stack(self):
         self.assertIn('history.replaceState(appRoute(),"")', self.page)
