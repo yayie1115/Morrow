@@ -7256,10 +7256,29 @@ def delete_study_handbook():
     return jsonify(_study_settings_payload(db))
 
 
+@app.get("/api/tidy/summaries/<int:version_id>")
+@require_auth
+def summary_version_detail(version_id):
+    row = get_db().execute("SELECT v.*,s.title FROM conversation_summary_versions v JOIN sessions s ON s.id=v.session_id WHERE v.id=?", (version_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "记录不存在"}), 404
+    return jsonify(dict(row))
+
+
+@app.get("/api/study/runs/<int:run_id>")
+@require_auth
+def study_run_detail(run_id):
+    row = get_db().execute("SELECT r.*,s.title FROM night_runs r JOIN sessions s ON s.id=r.session_id WHERE r.id=?", (run_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "记录不存在"}), 404
+    return jsonify(_night_run_dict(row))
+
+
 @app.get("/api/study/runs")
 @require_auth
 def list_study_runs():
-    rows = get_db().execute(
+    compact = request.args.get("view") == "compact"
+    query = (
         "SELECT r.id,r.session_id,r.origin,r.status,r.handbook_name,r.user_note,"
         "r.chain_id,r.parent_run_id,r.attempt,r.resume_state,r.scheduled_job_id,"
         "r.primary_provider_id,r.primary_model,r.used_provider_id,r.used_model,"
@@ -7268,8 +7287,15 @@ def list_study_runs():
         "r.context_message_id,r.end_reason,r.error,r.created_at,r.started_at,r.completed_at,"
         "s.title FROM night_runs r JOIN sessions s ON s.id=r.session_id "
         "ORDER BY r.id DESC LIMIT 100"
-    ).fetchall()
-    return jsonify([_night_run_dict(row) for row in rows])
+    )
+    if compact:
+        query = query.replace("r.tool_log,r.activity_log,r.self_recap,r.context_record,", "'[]' AS tool_log,'[]' AS activity_log,'' AS self_recap,'' AS context_record,CASE WHEN length(r.activity_log)>2 THEN 1 ELSE 0 END AS has_activity,")
+    rows = get_db().execute(query).fetchall()
+    items = [_night_run_dict(row) for row in rows]
+    if compact:
+        for item in items:
+            item["_detail_pending"] = True
+    return jsonify(items)
 
 
 def _night_random_at(wake_date):
@@ -9557,7 +9583,8 @@ def maybe_auto_compress(session_id):
 @app.get("/api/tidy/summaries")
 @require_auth
 def list_summary_versions():
-    rows = get_db().execute(
+    compact = request.args.get("view") == "compact"
+    query = (
         "SELECT v.id,v.session_id,v.source,v.status,v.summary,"
         "v.covered_from_message_id,v.covered_through_message_id,v.message_count,"
         "v.estimated_context_tokens,v.observed_context_tokens,"
@@ -9565,11 +9592,17 @@ def list_summary_versions():
         "v.recent_message_count,v.target_tokens,v.instruction,v.model,v.error,"
         "v.created_at,v.reverted_at,v.rollback_restorable,s.title FROM conversation_summary_versions v "
         "JOIN sessions s ON s.id=v.session_id ORDER BY v.id DESC LIMIT 200"
-    ).fetchall()
+    )
+    if compact:
+        for field in ("summary", "instruction", "error"):
+            query = query.replace("v." + field + ",", "'' AS " + field + ",")
+    rows = get_db().execute(query).fetchall()
     items = []
     db = get_db()
     for row in rows:
         item = dict(row)
+        if compact:
+            item["_detail_pending"] = True
         later = db.execute(
             "SELECT 1 FROM conversation_summary_versions WHERE session_id=? AND id>? LIMIT 1",
             (row["session_id"], row["id"]),

@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
+class Element{
+ constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.hidden=false;this.isConnected=true;this.className='';this.classList={toggle:(n,v)=>{const a=this.className.split(' ').filter(x=>x!==n);if(v)a.push(n);this.className=a.join(' ');}};}
+ append(...nodes){for(const n of nodes){n.parent=this;this.children.push(n);}} replaceChildren(...nodes){this.children=[];this.append(...nodes);}setAttribute(n,v){this.attrs[n]=v;}removeAttribute(n){delete this.attrs[n];}replaceWith(n){const a=this.parent.children;a[a.indexOf(this)]=n;n.parent=this.parent;}focus(){}select(){}
+}
+const host=new Element('host');const find=(cls,n=host)=>n.className.split(' ').includes(cls)?n:n.children.map(x=>find(cls,x)).find(Boolean);let audioCount=0;
+class Audio{constructor(){audioCount++;this.paused=true;}pause(){this.paused=true;}removeAttribute(){}load(){}play(){this.paused=false;return Promise.resolve();}}
+const context={document:{createElement:t=>new Element(t),addEventListener(){},getElementById(){return null;}},window:{},Audio,Number,Map,Set,setTimeout,clearTimeout};
+vm.runInNewContext(fs.readFileSync(process.argv[2]||'static/voice-archive.js','utf8'),context);
+(async()=>{const api=async url=>({ok:true,json:async()=>url.includes('favorite')?{favorite:true}:[{id:1,type:'voice_letter',text:'Test',title:'Title',audio_url:'/synthetic.mp3',created_at:'2026-01-01',meta:{}}]});
+await context.window.sakieVoiceArchive.mount(host,{api,notify(){},assistantName:()=> 'Test'});const card=find('va-card');assert.equal(audioCount,0);find('va-expand').onclick();assert.equal(find('va-card'),card);assert.equal(find('va-detail').hidden,false);await find('va-star').onclick();assert.equal(find('va-card'),card);assert.equal(find('va-star').attrs['aria-pressed'],'true');find('va-play').onclick();await Promise.resolve();assert.equal(audioCount,1);const input=find('va-search').children[1];input.value='missing';input.oninput();assert.equal(find('va-card'),card);await new Promise(r=>setTimeout(r,210));assert.equal(find('va-card'),undefined);context.window.sakieVoiceArchive.dispose();console.log('VOICE_LAZY_AUDIO_ROW_IDENTITY_FAVORITE_DEBOUNCE_PASS');})().catch(e=>{console.error(e);process.exitCode=1;});

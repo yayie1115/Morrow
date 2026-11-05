@@ -4820,7 +4820,7 @@
 <script src="/static/chat-voice.js?v=8"></script>
 <script src="/static/chat-parts.js?v=1"></script>
 <script src="/static/chat-voice-input.js?v=3"></script>
-<script src="/static/voice-archive.js?v=1"></script>
+<script src="/static/voice-archive.js?v=tidy-lazy-1"></script>
 <script>
 const $=(s)=>document.querySelector(s), $$=(s)=>document.querySelectorAll(s);
 let sessionId=null;
@@ -8891,8 +8891,8 @@ function studyRunDay(run){return studyRunStamp(run).slice(0,10);}
 function studyRunIsVisible(run){
   if(run.status==="queued"||run.status==="running")return false;
   const events=Array.isArray(run.activity_log)?run.activity_log:[];
-  if(run.status==="quiet"&&!events.length&&!run.self_recap&&!run.handoff)return false;
-  return !!run.footprint||!!events.length||run.status==="failed";
+  if(run.status==="quiet"&&!run.has_activity&&!events.length&&!run.self_recap&&!run.handoff)return false;
+  return !!run.footprint||!!run.has_activity||!!events.length||run.status==="failed";
 }
 let VOICE_DRAWER_ARTIFACTS=[],voiceDrawerDetailKey="";
 function syncVoiceFavorite(artifactId,favorite){$$('.voice-envelope[data-artifact-id="'+artifactId+'"]').forEach(letter=>letter.classList.toggle("is-favorite",favorite));const stored=VOICE_DRAWER_ARTIFACTS.find(item=>String(item.id)===String(artifactId));if(stored)stored.favorite=favorite;if(currentVoiceArtifact&&String(currentVoiceArtifact.id)===String(artifactId))currentVoiceArtifact.favorite=favorite;}
@@ -8947,8 +8947,10 @@ async function loadAlarmDrawer(){
   let items=[];try{const r=await api("/api/alarms");items=r.ok?await r.json():[];}catch{}
   empty.querySelector("strong").textContent="future notes";empty.querySelector("span").textContent="还没有未来纸条。等"+assistantName()+"想在之后再来找你时，它们会夹在这里。";empty.hidden=items.length>0;list.hidden=!items.length;if(!items.length)return;
   const wrap=document.createElement("div");wrap.className="alarm-notes";
-  items.forEach(item=>{const card=document.createElement("article");card.className="alarm-note "+item.status;card.innerHTML='<div class="alarm-note-head"><span></span><time></time></div><div class="alarm-note-body"></div><div class="alarm-note-source"></div>';card.querySelector("span").textContent=ALARM_STATUS[item.status]||item.status;card.querySelector("time").textContent=String(item.earliest_at||"").slice(0,16)+(item.latest_at&&item.latest_at!==item.earliest_at?" — "+String(item.latest_at).slice(11,16):"");card.querySelector(".alarm-note-body").textContent=item.note||"Morrow没有另外写备注，只把那一刻的念头留给了未来的自己。";const source=(item.source_text||"").trim();const sourceBox=card.querySelector(".alarm-note-source");sourceBox.textContent=source?"那时你说："+source:"没有留下触发它的那句话";attachLongPress(card,()=>alarmCardAction(item));wrap.appendChild(card);});
-  list.appendChild(wrap);
+  let shown=0;const more=document.createElement("button");more.type="button";more.className="va-more";more.textContent="加载更早的纸条";
+  function appendPage(){items.slice(shown,shown+20).forEach(item=>{const card=document.createElement("article");card.className="alarm-note "+item.status;card.innerHTML='<div class="alarm-note-head"><span></span><time></time></div><div class="alarm-note-body"></div><div class="alarm-note-source"></div>';card.querySelector("span").textContent=ALARM_STATUS[item.status]||item.status;card.querySelector("time").textContent=String(item.earliest_at||"").slice(0,16)+(item.latest_at&&item.latest_at!==item.earliest_at?" — "+String(item.latest_at).slice(11,16):"");card.querySelector(".alarm-note-body").textContent=item.note||"Morrow没有另外写备注，只把那一刻的念头留给了未来的自己。";const source=(item.source_text||"").trim();const sourceBox=card.querySelector(".alarm-note-source");sourceBox.textContent=source?"那时你说："+source:"没有留下触发它的那句话";attachLongPress(card,()=>alarmCardAction(item));wrap.appendChild(card);});
+  shown+=20;more.hidden=shown>=items.length;}
+  more.onclick=appendPage;appendPage();list.append(wrap,more);
 }
 let DRAWER_KIND="keepsake",KEEPSAKES=[],CURRENT_KEEPSAKE=null,KEEPSAKE_FILTER="all",KEEPSAKE_QUERY="",KEEPSAKE_REPLY_TARGET=null,KEEPSAKE_ALBUM_SCROLL=0,KEEPSAKE_DETAIL_SCROLL=0;
 let keepsakeSearchHideTimer=null,keepsakeSearchDebounce=null,keepsakePullStartY=null,keepsakePullDistance=0;
@@ -9196,9 +9198,13 @@ function renderStudyRuns(runs){
       const note=document.createElement("div");note.className="footprint-note";
       note.textContent=assistantPronoun()+"给以后留了一个念头："+run.follow_up_reason;entry.appendChild(note);
     }
+    if(run._detail_pending&&run.has_activity){
+      const lazy=document.createElement("button");lazy.type="button";lazy.className="study-activity";lazy.textContent="展开小房间里的全部记录";
+      lazy.onclick=async()=>{lazy.disabled=true;try{const r=await api("/api/study/runs/"+run.id);if(!r.ok)throw Error();Object.assign(run,await r.json(),{_detail_pending:false});if(entry.isConnected)renderStudyRuns(FOOTPRINT_RUNS);}catch{toast("活动记录暂时没读到，请重试");lazy.disabled=false;}};entry.appendChild(lazy);
+    }
     if(events.length){
       const details=document.createElement("details");details.className="study-activity";
-      if(run.status==="failed"||run.recovered)details.open=true;
+      if(run.status==="failed"||run.recovered||run._detail_pending===false)details.open=true;
       const summary=document.createElement("summary");
       const tools=events.filter(e=>e.type==="tool").length;
       const words=events.filter(e=>e.type==="monologue").length;
@@ -9262,7 +9268,7 @@ function renderStudyRuns(runs){
 async function loadStudyData(){
   if(studyPollTimer){clearTimeout(studyPollTimer);studyPollTimer=null;}
   try{
-    const [settingsRes,runsRes]=await Promise.all([api("/api/study/settings"),api("/api/study/runs")]);
+    const [settingsRes,runsRes]=await Promise.all([api("/api/study/settings"),api("/api/study/runs?view=compact")]);
     STUDY_SETTINGS=await settingsRes.json();const runs=await runsRes.json();
     renderStudySettings();renderStudyRuns(Array.isArray(runs)?runs:[]);
   }catch{
@@ -9641,7 +9647,7 @@ function bindAssistantModels(){
 }
 async function loadSummaryLogs(){
   const box=$("#tidySummaryList");box.innerHTML='<div class="tidy-empty">加载中…</div>';
-  let list=[];try{list=await(await api("/api/tidy/summaries")).json();}catch{}
+  let list=[];try{list=await(await api("/api/tidy/summaries?view=compact")).json();}catch{}
   if(!list.length){box.innerHTML='<div class="tidy-empty">还没有摘要记录。手动或自动把旧对话折进小本本后，会在这里留下版本。</div>';return;}
   box.innerHTML="";
   list.forEach(v=>{
@@ -9668,7 +9674,7 @@ async function loadSummaryLogs(){
     ].filter(Boolean).join(" · ");
     d.querySelector(".summary-copy").textContent=failed?(v.error||"这次整理没有成功"):v.summary;
     const toggle=d.querySelector(".result-toggle");
-    toggle.onclick=()=>{const open=!d.classList.contains("open");d.classList.toggle("open",open);
+    toggle.onclick=async()=>{if(toggle.disabled)return;if(v._detail_pending){toggle.disabled=true;try{const r=await api("/api/tidy/summaries/"+v.id);if(!r.ok)throw Error();Object.assign(v,await r.json(),{_detail_pending:false});d.querySelector(".summary-copy").textContent=failed?(v.error||"这次整理没有成功"):v.summary;}catch{toast("摘要暂时没读到，请重试");return;}finally{toggle.disabled=false;}}const open=!d.classList.contains("open");d.classList.toggle("open",open);
       toggle.setAttribute("aria-expanded",String(open));toggle.setAttribute("aria-label",open?"收起摘要":"展开摘要");
       tidySmoothPanel(d.querySelector(".summary-book-reveal"),open,320);};
     d.querySelector(".summary-book-head").onclick=e=>{if(!e.target.closest("button"))toggle.click();};

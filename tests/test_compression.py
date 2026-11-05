@@ -460,7 +460,7 @@ class CompressionTest(unittest.TestCase):
         self.assertIn('hm.slice(0,5)', html)
         self.assertIn("本批原文约 ", html)
         self.assertIn('"/api/auto-compression"', html)
-        self.assertIn('"/api/tidy/summaries"', html)
+        self.assertIn('"/api/tidy/summaries?view=compact"', html)
         self.assertIn('class="summary-edit"', html)
         self.assertIn('class="summary-regenerate"', html)
         self.assertIn('class="summary-rollback"', html)
