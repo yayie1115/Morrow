@@ -3,6 +3,7 @@ from contextvars import ContextVar
 from contextlib import closing
 from functools import wraps
 import inspect
+import stream_diagnostics
 import json
 import sqlite3
 import time
@@ -25,7 +26,9 @@ def _write(state, outcome):
                 'upstream_ids': attempt.get('upstream_ids', {}),
                 'session_id': state['provider'].get('trace_session_id'),
                 'user_message_id': state['provider'].get('trace_user_message_id'),
-                'repetition_origin': state.get('repetition_origin')}
+                'repetition_origin': state.get('repetition_origin'),
+                'stream_diagnostics': attempt['diagnostics'].data if attempt.get('diagnostics') else {},
+                'transport_error_type': attempt.get('transport_error_type', '')}
     try:
         with closing(sqlite3.connect(state['db'], timeout=.3)) as conn, conn:
             conn.execute('UPDATE http_request_logs SET ok=?,status_code=?,elapsed_ms=?,error_type=?,error=? WHERE id=?',
@@ -46,6 +49,7 @@ def legacy(error_type='', ok=False):
     """Existing transport log calls finish their own started row, not a second row."""
     state = _current.get()
     if not state or not state.get('attempt'): return False
+    state['attempt']['transport_error_type'] = error_type if error_type in ('EmptyStream','IncompleteStream','StreamError','JSONDecodeError') else ('other' if error_type else '')
     outcome = state['outcome'] if state['outcome'] in ('stream_error', 'repetition_abort', 'cancelled', 'exception', 'connection_error') else ('complete' if ok else (error_type or 'request_error'))
     state['outcome'] = outcome
     _write(state, outcome)
@@ -88,6 +92,7 @@ def post(send, url, **kwargs):
     attempt['response'] = response
     attempt['status'] = response.status_code
     headers = getattr(response, 'headers', {}) or {}
+    attempt['diagnostics'] = stream_diagnostics.Collector(headers)
     attempt['upstream_ids'] = {key: _safe_id(headers.get(key)) for key in _HEADERS
                                if _safe_id(headers.get(key))}
     _write(state, 'in_flight')
@@ -140,3 +145,13 @@ def traced(function):
                 finally:
                     _current.reset(token)
     return run
+
+
+def observe_lines(lines):
+    for line in lines:
+        state = _current.get()
+        collector = (state.get('attempt') or {}).get('diagnostics') if state else None
+        if collector:
+            try:collector.observe(line)
+            except Exception:pass
+        yield line

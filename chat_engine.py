@@ -2512,7 +2512,7 @@ def _stream_openai_once(base_url, api_key, model, messages, think, provider_meta
     saw_output = False
     runaway = False
     try:
-        for line in _sse_lines(resp):
+        for line in request_trace.observe_lines(_sse_lines(resp)):
             line = line.strip()
             if not line or not line.startswith("data:"):
                 continue
@@ -2928,7 +2928,7 @@ def _stream_anthropic_once(base_url, api_key, model, system_sections, messages, 
     saw_terminal = False
     runaway = False
     try:
-        for line in _sse_lines(resp):
+        for line in request_trace.observe_lines(_sse_lines(resp)):
             line = line.strip()
             if not line or not line.startswith("data:"):
                 continue
